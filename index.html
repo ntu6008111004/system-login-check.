@@ -158,10 +158,10 @@
             </div>
         </div>
         <div class="bottom-nav">
-            <div class="nav-item active"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
-            <div class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
-            <div class="nav-item hidden" id="navAdmin" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
-            <div class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
+            <div id="navDashboard" class="nav-item active" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
+            <div id="navHistory" class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
+            <div id="navAdmin" class="nav-item hidden" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
+            <div id="navLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
         </div>
     </div>
 
@@ -204,10 +204,10 @@
             </div>
         </div>
         <div class="bottom-nav">
-            <div class="nav-item" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
-            <div class="nav-item active"><i class="fas fa-history"></i><span>ประวัติ</span></div>
-            <div class="nav-item hidden" id="navAdminHist" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
-            <div class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
+            <div id="histNavDashboard" class="nav-item" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
+            <div id="histNavHistory" class="nav-item active" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
+            <div id="histNavAdmin" class="nav-item hidden" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
+            <div id="histNavLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
         </div>
     </div>
 
@@ -333,10 +333,10 @@
         </div>
 
         <div class="bottom-nav">
-            <div id="navDashboard" class="nav-item" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
-            <div id="navHistory" class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
-            <div id="navAdmin" class="nav-item" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
-            <div id="navLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
+            <div id="adminNavDashboard" class="nav-item" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
+            <div id="adminNavHistory" class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
+            <div id="adminNavAdmin" class="nav-item active" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
+            <div id="adminNavLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
         </div>
     </div>
   </div>

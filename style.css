@@ -161,16 +161,35 @@ body {
 
 /* Bottom Nav */
 .bottom-nav {
-  position: absolute;
+  position: fixed;
   bottom: 0px;
+  max-width: 420px;
   width: 100%;
+  left: 50%;
+  transform: translateX(-50%);
   background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(12px);
   border-top: 1px solid rgba(226, 232, 240, 0.5);
   display: flex;
   justify-content: space-around;
   padding: 0.75rem 1rem 1.25rem 1rem;
-  z-index: 100;
+  z-index: 1000;
+}
+
+#main-content {
+  display: flex;
+  flex-direction: column;
+}
+
+#view-dashboard, #view-history, #view-admin {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#main-content.fullscreen-mode .bottom-nav {
+  max-width: 100%;
 }
 .nav-item {
   display: flex;
