@@ -193,11 +193,8 @@ function initApp() {
   
   if (savedUser) {
     currentUser = JSON.parse(savedUser);
-    if (isLoginPage) {
-        window.location.href = 'index.html';
-        return;
-    }
     $('#chkRemember').prop('checked', true);
+    loadBranches(); // Always load branches for active sessions
     // Admin users go directly to admin view, regular users go to dashboard
     if (currentUser.role === 'admin') {
         switchView('admin');
@@ -871,8 +868,9 @@ async function loadAdminData(force = false, silent = false) {
   if (res.success) {
     adminData = res.records;
     
-    // Populate Branch Filter
+    // Ensure branches are loaded before populating filter
     if (allBranches.length === 0) await loadBranches();
+    
     if (activeAdminTab === 'logs') {
         const branchOptions = ['<option value="">-- สาขาทั้งหมด --</option>'];
         allBranches.forEach(b => branchOptions.push(`<option value="${b.name}">${b.name}</option>`));
@@ -1159,7 +1157,7 @@ async function openAddUserModal() {
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-1">สาขา <span class="text-red-500">*</span></label>
-        <select id="swal-company" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200">
+        <select id="swal-company" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 shadow-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-100 transition-all">
             <option value="">-- เลือกสาขา --</option>
             ${allBranches.map(b => `<option value="${b.name}">${b.name}</option>`).join('')}
         </select>
@@ -1393,7 +1391,7 @@ async function editUser(id) {
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-1">สาขา <span class="text-red-500">*</span></label>
-        <select id="swal-company" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200">
+        <select id="swal-company" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 shadow-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-100 transition-all">
             <option value="">-- เลือกสาขา --</option>
             ${allBranches.map(b => `<option value="${b.name}" ${u.company === b.name ? 'selected' : ''}>${b.name}</option>`).join('')}
         </select>
