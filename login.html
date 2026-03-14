@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>WorkLogs - เข้าสู่ระบบ</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { corporate: { 50: '#eff6ff', 100: '#dbeafe', 500: '#3b82f6', 700: '#1d4ed8', 900: '#1e3a8a' } },
+          fontFamily: { sans: ['Sarabun', 'sans-serif'] }
+        }
+      }
+    }
+  </script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-corporate-50 min-h-screen text-slate-800 antialiased font-sans">
+
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="loader-spinner"></div>
+    <p class="mt-4 font-bold text-corporate-900 tracking-wide">กำลังเข้าสู่ระบบ...</p>
+  </div>
+
+  <div id="main-content" class="max-w-md mx-auto relative min-h-screen bg-white shadow-xl overflow-hidden flex flex-col justify-center">
+    
+    <!-- Login View -->
+    <div id="view-login" class="h-full flex flex-col p-8 justify-center items-center bg-gradient-to-br from-corporate-50 to-white">
+        <div class="w-full max-w-sm premium-card p-8 text-center animate-in fade-in slide-in-from-bottom-10 duration-700">
+            <div class="mb-8 relative inline-block">
+                <div class="w-24 h-24 bg-gradient-to-tr from-corporate-900 to-blue-500 rounded-[2rem] flex items-center justify-center mx-auto shadow-2xl shadow-blue-200 text-white text-4xl">
+                    <i class="fas fa-fingerprint"></i>
+                </div>
+                <div class="absolute -bottom-2 -right-2 w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center border-4 border-white text-white text-xs shadow-lg">
+                    <i class="fas fa-check"></i>
+                </div>
+            </div>
+            <h1 class="text-3xl font-extrabold text-corporate-900 mb-2 tracking-tight">WorkLogs</h1>
+            <p class="text-slate-400 text-sm mb-10 font-medium">ระบบลงเวลาปฏิบัติงานอัจฉริยะ</p>
+            
+            <form id="formLogin" class="space-y-5 text-left">
+                <div class="space-y-4">
+                  <div class="relative group">
+                    <i class="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-corporate-900 transition-colors"></i>
+                    <input type="text" id="username" placeholder="ชื่อผู้ใช้งาน" required 
+                      class="w-full pl-12 pr-4 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-corporate-900 focus:bg-white outline-none transition-all font-semibold placeholder:text-slate-400">
+                  </div>
+                  <div class="relative">
+                    <i class="fas fa-lock input-icon"></i>
+                    <input type="password" id="password" placeholder="รหัสผ่าน" class="input-field" required>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between px-1">
+                    <div class="flex items-center">
+                        <input type="checkbox" id="chkRemember" class="w-5 h-5 text-corporate-700 bg-slate-50 border-slate-200 rounded-lg focus:ring-0" checked>
+                        <label for="chkRemember" class="ml-3 text-sm font-bold text-slate-500">จดจำฉัน</label>
+                    </div>
+                    <!-- <a href="#" class="text-xs font-bold text-blue-600">ลืมรหัสผ่าน?</a> -->
+                </div>
+                <button type="submit" class="btn-primary mt-8 py-4 text-lg">เข้าสู่ระบบ <i class="fas fa-chevron-right ml-2 text-sm"></i></button>
+            </form>
+            <div class="mt-12 flex items-center justify-center gap-2">
+                <span class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
+                <p class="text-[10px] font-bold text-slate-300 tracking-widest uppercase">Secured by Antigravity</p>
+            </div>
+        </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
