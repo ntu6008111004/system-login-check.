@@ -1,8 +1,5 @@
-/**
- * WorkLogs - Enhanced Decoupled Frontend Logic
- */
-
-const API_URL = 'https://script.google.com/macros/s/AKfycbzko9Sqv5oW8Q-l1s3YxuKH6RUIWLnL0BNJf6BfvBwXNucU-75Wm8yUV_SHrX0rpusr/exec';
+const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J6a285U3F2NW9XOFFsdTFzM1l4dUtIUlJVSVdMbjBMQk5KZjZCZnZCd1hOdVUtNzVXbTh5VVZfU0hyWDBycHVzci9leGVj';
+const API_URL = atob(_u);
 
 // System State
 let currentUser = null;
