@@ -30,6 +30,7 @@ let activeAdminTab = 'logs';
 let adminCurrentPage = 1;
 const adminRowsPerPage = 10;
 let adminPollInterval = null;
+let allBranches = []; // Master Data for Branches
 
 // Utility
 const formatThaiDate = (dateStr) => {
@@ -439,7 +440,8 @@ async function handleLogin(e) {
         showConfirmButton: false,
         background: 'rgba(255, 255, 255, 0.95)',
         backdrop: 'rgba(30, 58, 138, 0.2) blur(10px)'
-    }).then(() => {
+    }).then(async () => {
+        await loadBranches(); // Load master data after login
         window.location.href = 'index.html';
     });
   } else {
@@ -457,7 +459,7 @@ function logout() {
  */
 function setupDashboard() {
   $('#txtUserName').text(currentUser.name);
-  $('#txtUserCompany').text(currentUser.company);
+  $('#txtUserBranch').text(currentUser.company || '-'); // Backend still uses 'company' field for now
   const avatarUrl = currentUser.profile || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(currentUser.name)}&backgroundColor=1e3a8a`;
   $('#userAvatar').attr('src', avatarUrl);
   startCamera();
@@ -858,21 +860,42 @@ function updateAdminUserFilter() {
 
 async function loadAdminData(force = false, silent = false) {
   const cached = force ? null : getCache('get_admin_data');
-  if (cached) { adminData = cached.records; updateAdminUserFilter(); renderAdminLogs(); }
+  if (cached) { 
+      adminData = cached.records; 
+      updateAdminUserFilter(); 
+      renderAdminLogs(); 
+  }
   
   const isSilent = silent || (!!cached && !force);
   const res = await callAPI('get_admin_data', {}, isSilent);
   if (res.success) {
     adminData = res.records;
+    
+    // Populate Branch Filter
+    if (allBranches.length === 0) await loadBranches();
+    if (activeAdminTab === 'logs') {
+        const branchOptions = ['<option value="">-- สาขาทั้งหมด --</option>'];
+        allBranches.forEach(b => branchOptions.push(`<option value="${b.name}">${b.name}</option>`));
+        $('#filterBranch').html(branchOptions.join(''));
+    }
+    
     updateAdminUserFilter();
     renderAdminLogs();
   }
+}
+
+async function loadBranches() {
+    const res = await callAPI('get_branches', {}, true);
+    if (res.success) {
+        allBranches = res.branches;
+    }
 }
 
 function getFilteredAdminRecords() {
   const start = $('#filterStartDate').val();
   const end = $('#filterEndDate').val();
   const userId = $('#filterUser').val();
+  const branchName = $('#filterBranch').val();
   
   const startTime = start ? new Date(start + 'T00:00:00').getTime() : 0;
   const endTime = end ? new Date(end + 'T23:59:59').getTime() : Infinity;
@@ -889,7 +912,8 @@ function getFilteredAdminRecords() {
     const rTime = rDate ? rDate.getTime() : 0;
     const dateMatch = rTime >= startTime && rTime <= endTime;
     const userMatch = userId ? String(r.user_id) === String(userId) : true;
-    return dateMatch && userMatch;
+    const branchMatch = branchName ? String(r.company) === String(branchName) : true;
+    return dateMatch && userMatch && branchMatch;
   });
 }
 
@@ -1134,8 +1158,11 @@ async function openAddUserModal() {
         <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" type="password" placeholder="รหัสผ่าน (เว้นว่าง = 1234)">
       </div>
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">บริษัท <span class="text-red-500">*</span></label>
-        <input id="swal-company" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" placeholder="ชื่อบริษัท">
+        <label class="block text-xs font-medium text-slate-600 mb-1">สาขา <span class="text-red-500">*</span></label>
+        <select id="swal-company" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200">
+            <option value="">-- เลือกสาขา --</option>
+            ${allBranches.map(b => `<option value="${b.name}">${b.name}</option>`).join('')}
+        </select>
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-1">สิทธิ์ผู้ใช้งาน</label>
@@ -1253,7 +1280,7 @@ async function openAddUserModal() {
       
       // Validation
       if (!username || !first_name || !last_name || !company) {
-        Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, ชื่อผู้ใช้งาน, บริษัท)');
+        Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, ชื่อผู้ใช้งาน, สาขา)');
         return false;
       }
 
@@ -1290,7 +1317,7 @@ async function openAddUserModal() {
         <div class="text-left text-sm">
           <p><strong>ชื่อ:</strong> ${result.value.first_name} ${result.value.last_name}</p>
           <p><strong>ชื่อผู้ใช้:</strong> ${result.value.username}</p>
-          <p><strong>บริษัท:</strong> ${result.value.company}</p>
+          <p><strong>สาขา:</strong> ${result.value.company}</p>
           <p><strong>สิทธิ์:</strong> ${result.value.role === 'admin' ? 'ผู้ดูแลระบบ' : 'พนักงานทั่วไป'}</p>
           ${result.value.profile ? '<p class="text-green-600">✓ มีรูปโปรไฟล์</p>' : '<p class="text-slate-400">ไม่มีรูปโปรไฟล์</p>'}
         </div>
@@ -1365,8 +1392,11 @@ async function editUser(id) {
         <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" type="password" placeholder="รหัสผ่าน (เว้นว่าง = ไม่เปลี่ยน)">
       </div>
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">บริษัท <span class="text-red-500">*</span></label>
-        <input id="swal-company" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" placeholder="ชื่อบริษัท" value="${u.company || ''}">
+        <label class="block text-xs font-medium text-slate-600 mb-1">สาขา <span class="text-red-500">*</span></label>
+        <select id="swal-company" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200">
+            <option value="">-- เลือกสาขา --</option>
+            ${allBranches.map(b => `<option value="${b.name}" ${u.company === b.name ? 'selected' : ''}>${b.name}</option>`).join('')}
+        </select>
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-1">สิทธิ์ผู้ใช้งาน</label>
@@ -1551,7 +1581,7 @@ async function editUser(id) {
             const role = document.getElementById('swal-role').value;
             
             if (!username || !first_name || !last_name || !company) {
-                Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, ชื่อผู้ใช้งาน, บริษัท)');
+                Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, ชื่อผู้ใช้งาน, สาขา)');
                 return false;
             }
 
@@ -1594,7 +1624,7 @@ async function editUser(id) {
                 <div class="text-left text-sm">
                     <p><strong>ชื่อ:</strong> ${result.value.first_name} ${result.value.last_name}</p>
                     <p><strong>ชื่อผู้ใช้:</strong> ${result.value.username}</p>
-                    <p><strong>บริษัท:</strong> ${result.value.company}</p>
+                    <p><strong>สาขา:</strong> ${result.value.company}</p>
                     <p><strong>สิทธิ์:</strong> ${result.value.role === 'admin' ? 'ผู้ดูแลระบบ' : 'พนักงานทั่วไป'}</p>
                     ${result.value.profile ? '<p class="text-green-600">✓ มีรูปโปรไฟล์</p>' : '<p class="text-slate-400">ไม่มีรูปโปรไฟล์</p>'}
                 </div>
