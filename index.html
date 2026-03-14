@@ -157,12 +157,7 @@
                 <p class="text-[9px] font-medium text-blue-500 pt-1 border-t border-blue-100/50 italic">*ข้อมูลพิกัดและรูปภาพจะถูกส่งตรงไปยังระบบหลังบ้านของบริษัทเท่านั้น</p>
             </div>
         </div>
-        <div class="bottom-nav">
-            <div id="navDashboard" class="nav-item active" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
-            <div id="navHistory" class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
-            <div id="navAdmin" class="nav-item hidden" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
-            <div id="navLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
-        </div>
+        <!-- Bottom nav removed from here -->
     </div>
 
     <!-- 3: History View -->
@@ -203,12 +198,7 @@
                 </button>
             </div>
         </div>
-        <div class="bottom-nav">
-            <div id="histNavDashboard" class="nav-item" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
-            <div id="histNavHistory" class="nav-item active" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
-            <div id="histNavAdmin" class="nav-item hidden" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
-            <div id="histNavLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
-        </div>
+        <!-- Bottom nav removed from here -->
     </div>
 
     <!-- 4: Admin View -->
@@ -332,12 +322,15 @@
             </div>
         </div>
 
-        <div class="bottom-nav">
-            <div id="adminNavDashboard" class="nav-item" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
-            <div id="adminNavHistory" class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
-            <div id="adminNavAdmin" class="nav-item active" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
-            <div id="adminNavLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
-        </div>
+        <!-- Bottom nav removed from here -->
+    </div>
+
+    <!-- PERSISTENT BOTTOM NAV (Outside individual views) -->
+    <div id="persistent-nav" class="bottom-nav hidden">
+        <div id="navDashboard" class="nav-item active" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
+        <div id="navHistory" class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
+        <div id="navAdmin" class="nav-item hidden" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
+        <div id="navLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
     </div>
   </div>
 

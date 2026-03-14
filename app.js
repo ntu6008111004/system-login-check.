@@ -352,8 +352,14 @@ function switchView(viewName) {
   
   // If we are on index.html, we don't have view-login anymore
   $('[id^="view-"]').addClass('hidden');
-  $('.nav-item').removeClass('active');
   $(`#view-${viewName}`).removeClass('hidden'); 
+  
+  // Manage persistent navigation
+  if (viewName !== 'login') {
+      $('#persistent-nav').removeClass('hidden');
+  } else {
+      $('#persistent-nav').addClass('hidden');
+  }
 
   // Toggle Fullscreen Mode for Admin
   if (viewName === 'admin') {
@@ -856,6 +862,7 @@ function updateAdminUserFilter() {
 }
 
 async function loadAdminData(force = false, silent = false) {
+  try {
   const cached = force ? null : getCache('get_admin_data');
   if (cached) { 
       adminData = cached.records; 
@@ -869,23 +876,33 @@ async function loadAdminData(force = false, silent = false) {
     adminData = res.records;
     
     // Ensure branches are loaded before populating filter
-    if (allBranches.length === 0) await loadBranches();
+    if (!allBranches || allBranches.length === 0) await loadBranches();
     
     if (activeAdminTab === 'logs') {
         const branchOptions = ['<option value="">-- สาขาทั้งหมด --</option>'];
-        allBranches.forEach(b => branchOptions.push(`<option value="${b.name}">${b.name}</option>`));
+        if (allBranches && Array.isArray(allBranches)) {
+            allBranches.forEach(b => branchOptions.push(`<option value="${b.name}">${b.name}</option>`));
+        }
         $('#filterBranch').html(branchOptions.join(''));
     }
     
     updateAdminUserFilter();
     renderAdminLogs();
   }
+} catch (err) {
+  console.error('Error loading admin data:', err);
+}
 }
 
 async function loadBranches() {
-    const res = await callAPI('get_branches', {}, true);
-    if (res.success) {
-        allBranches = res.branches;
+    try {
+        const res = await callAPI('get_branches', {}, true);
+        if (res && res.success) {
+            allBranches = res.branches || [];
+        }
+    } catch (err) {
+        console.error('Error loading branches:', err);
+        allBranches = allBranches || [];
     }
 }
 
