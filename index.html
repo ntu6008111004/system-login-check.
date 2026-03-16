@@ -51,7 +51,7 @@
             <div class="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
             <div class="flex items-center gap-5 relative z-10">
                 <img id="userAvatar" src="" class="w-16 h-16 rounded-2xl border-2 border-white/50 bg-white shadow-lg object-cover">
-                <div><h2 id="txtUserName" class="font-bold text-xl leading-tight"></h2><p id="txtUserBranch" class="text-blue-200 text-xs opacity-80 uppercase tracking-wider mt-1"></p></div>
+                <div><h2 id="txtUserName" class="font-bold text-xl leading-tight"></h2><p id="txtUserCompany" class="text-blue-200 text-xs opacity-80 uppercase tracking-wider mt-1"></p></div>
             </div>
         </div>
         <div class="flex-1 overflow-y-auto p-5 pb-32 -mt-8 relative z-30 space-y-6">
@@ -122,42 +122,20 @@
                 </div>
             </div>
 
+            <div id="attendanceActionGroup" class="animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div class="flex gap-4">
                     <button id="btnIn" class="btn-primary flex-1 !bg-emerald-500 shadow-emerald-200" disabled><i class="fas fa-sign-in-alt mr-2"></i> เข้างาน</button>
                     <button id="btnOut" class="btn-primary flex-1 !bg-rose-500 shadow-rose-200" disabled><i class="fas fa-sign-out-alt mr-2"></i> ออกงาน</button>
                 </div>
                 <p id="attendanceHint" class="text-[10px] text-center text-slate-400 mt-3 font-medium">กรุณากดยืนยันรูปภาพเพื่อเปิดใช้งานการลงเวลา</p>
             </div>
-
-            <!-- Security & Permission Guide -->
-            <div class="bg-blue-50/50 border border-blue-100 rounded-3xl p-5 space-y-3">
-                <div class="flex items-center gap-3 text-blue-600 mb-1">
-                    <div class="w-8 h-8 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-blue-200">
-                        <i class="fas fa-shield-alt text-xs"></i>
-                    </div>
-                    <h4 class="font-black text-xs uppercase tracking-wider">คำแนะนำด้านความปลอดภัย</h4>
-                </div>
-                <p class="text-[10px] text-slate-500 leading-relaxed">ทำไมระบบถึงขอใช้ <b>กล้อง</b> และ <b>GPS</b>? ข้อมูลของท่านปลอดภัย 100% ครับ 🛡️</p>
-                <div class="space-y-2">
-                    <div class="flex gap-3">
-                        <i class="fas fa-camera text-blue-400 text-xs mt-0.5"></i>
-                        <div class="flex-1">
-                            <p class="text-[10px] font-bold text-slate-700">กล้อง (Camera)</p>
-                            <p class="text-[9px] text-slate-400">ใช้เพื่อยืนยันตัวตน (Face Check) ป้องกันการลงเวลาแทนกัน</p>
-                        </div>
-                    </div>
-                    <div class="flex gap-3">
-                        <i class="fas fa-map-marker-alt text-blue-400 text-xs mt-0.5"></i>
-                        <div class="flex-1">
-                            <p class="text-[10px] font-bold text-slate-700">ตำแหน่ง (GPS)</p>
-                            <p class="text-[9px] text-slate-400">ใช้เพื่อยืนยันว่าท่านอยู่ที่สาขาจริงตามนโยบายของระบบงาน</p>
-                        </div>
-                    </div>
-                </div>
-                <p class="text-[9px] font-medium text-blue-500 pt-1 border-t border-blue-100/50 italic">*ข้อมูลพิกัดและรูปภาพจะถูกส่งตรงไปยังระบบหลังบ้านของบริษัทเท่านั้น</p>
-            </div>
         </div>
-        <!-- Bottom nav removed from here -->
+        <div class="bottom-nav">
+            <div class="nav-item active"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
+            <div class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
+            <div class="nav-item hidden" id="navAdmin" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
+            <div class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
+        </div>
     </div>
 
     <!-- 3: History View -->
@@ -198,7 +176,12 @@
                 </button>
             </div>
         </div>
-        <!-- Bottom nav removed from here -->
+        <div class="bottom-nav">
+            <div class="nav-item" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
+            <div class="nav-item active"><i class="fas fa-history"></i><span>ประวัติ</span></div>
+            <div class="nav-item hidden" id="navAdminHist" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
+            <div class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
+        </div>
     </div>
 
     <!-- 4: Admin View -->
@@ -227,7 +210,14 @@
             <div id="admin-sub-users" class="admin-sub-view space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button onclick="openAddUserModal()" class="btn-primary py-3 text-sm w-full shadow-lg"><i class="fas fa-plus mr-2"></i> เพิ่มพนักงานใหม่</button>
-                    <button onclick="runAdminSelfTest()" class="bg-white border border-slate-200 text-slate-700 py-3 text-sm w-full rounded-2xl font-black shadow-sm hover:bg-slate-50 active:scale-98 transition-all flex items-center justify-center gap-2"><i class="fas fa-vial text-blue-500"></i> ทดสอบระบบ (Admin)</button>
+                    <div class="relative group">
+                        <select id="userBranchFilter" onchange="updateAdminUserFilter()" class="w-full bg-white border border-slate-200 text-slate-700 py-3 px-4 text-sm rounded-2xl font-black shadow-sm outline-none focus:border-blue-500 transition-all appearance-none cursor-pointer">
+                            <option value="">-- กรองตามสาขา (ทั้งหมด) --</option>
+                        </select>
+                        <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 group-hover:text-blue-500 transition-colors">
+                            <i class="fas fa-chevron-down text-xs"></i>
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
@@ -239,7 +229,7 @@
                             <tr>
                                 <th class="p-3 font-medium text-slate-600">พนักงาน</th>
                                 <th class="p-3 font-medium text-slate-600">สิทธิ์</th>
-                                <th class="p-3 font-medium text-slate-600">สาขา</th>
+                                <th class="p-3 font-medium text-slate-600">บริษัท</th>
                                 <th class="p-3 font-medium text-slate-600 text-center">จัดการ</th>
                             </tr>
                         </thead>
@@ -261,20 +251,21 @@
                             <input type="date" id="filterEndDate" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500 transition-all">
                         </div>
                     </div>
-                    <div class="grid grid-cols-2 gap-2">
-                        <div>
-                            <label class="text-[10px] uppercase font-black text-slate-400 mb-1 block">เลือกพนักงาน</label>
-                            <select id="filterUser" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 shadow-sm transition-all"></select>
-                        </div>
+                    <div class="grid grid-cols-2 gap-3">
                         <div>
                             <label class="text-[10px] uppercase font-black text-slate-400 mb-1 block">เลือกสาขา</label>
-                            <select id="filterBranch" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 shadow-sm transition-all">
+                            <select id="filterBranch" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500 transition-all">
                                 <option value="">-- สาขาทั้งหมด --</option>
                             </select>
                         </div>
+                        <div>
+                            <label class="text-[10px] uppercase font-black text-slate-400 mb-1 block">เลือกพนักงาน</label>
+                            <select id="filterUser" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500 transition-all"></select>
+                        </div>
                     </div>
-                    <div class="flex gap-2 pt-2">
-                        <button onclick="loadAdminData()" class="btn-primary flex-1 py-2 text-xs"><i class="fas fa-search mr-1"></i> กรองข้อมูล</button>
+                    <div class="flex flex-wrap gap-2 pt-2">
+                        <button onclick="loadAdminData()" class="btn-primary flex-1 py-2 text-xs min-w-[120px]"><i class="fas fa-search mr-1"></i> กรองข้อมูล</button>
+                        <button onclick="resetAdminFilters()" class="bg-slate-200 text-slate-700 rounded-xl px-4 py-2 text-xs font-bold hover:bg-slate-300 transition-colors flex items-center gap-1"><i class="fas fa-sync-alt"></i> ล้างค่า</button>
                         <button onclick="exportToExcel()" class="bg-emerald-500 text-white rounded-xl px-4 py-2 text-xs font-bold shadow-lg shadow-emerald-200 flex items-center gap-2"><i class="fas fa-file-excel"></i> Excel</button>
                         <button onclick="exportToCSV()" class="bg-blue-500 text-white rounded-xl px-4 py-2 text-xs font-bold shadow-lg shadow-blue-200 flex items-center gap-2"><i class="fas fa-file-csv"></i> CSV</button>
                     </div>
@@ -322,15 +313,12 @@
             </div>
         </div>
 
-        <!-- Bottom nav removed from here -->
-    </div>
-
-    <!-- PERSISTENT BOTTOM NAV (Outside individual views) -->
-    <div id="persistent-nav" class="bottom-nav hidden">
-        <div id="navDashboard" class="nav-item active" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
-        <div id="navHistory" class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
-        <div id="navAdmin" class="nav-item hidden" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
-        <div id="navLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
+        <div class="bottom-nav">
+            <div id="navDashboard" class="nav-item" onclick="switchView('dashboard')"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
+            <div id="navHistory" class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
+            <div id="navAdmin" class="nav-item" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
+            <div id="navLogout" class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
+        </div>
     </div>
   </div>
 

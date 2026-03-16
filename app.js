@@ -1,4 +1,4 @@
-const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5dmIyWndudzVmTlpCdXBQWGFkYlJvbWtrTTJLUHdCeU52ZHVodjlaQVNfc194cWNiTGdVTDlqckdqd3pJOWpoRS9leGVj';
+const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J3akFVRDZCa1RMb1JlQnlVLTNtOWVxdzBIMnN3TGIyU0l5ZzN6YjA5RXdOQ3hYMnZlMFp3UDB3aVU3VkNiMXg3MncvZXhlYw';
 const API_URL = atob(_u);
 
 // System State
@@ -11,6 +11,7 @@ let marker = null;
 let isLocationReady = false;
 let hasCheckedInToday = false;
 let hasCheckedOutToday = false;
+let allBranches = [];
 
 // AI State
 let faceDetection = null;
@@ -30,7 +31,6 @@ let activeAdminTab = 'logs';
 let adminCurrentPage = 1;
 const adminRowsPerPage = 10;
 let adminPollInterval = null;
-let allBranches = []; // Master Data for Branches
 
 // Utility
 const formatThaiDate = (dateStr) => {
@@ -193,10 +193,15 @@ function initApp() {
   
   if (savedUser) {
     currentUser = JSON.parse(savedUser);
+    if (isLoginPage) {
+        window.location.href = 'index.html';
+        return;
+    }
     $('#chkRemember').prop('checked', true);
-    loadBranches(); // Always load branches for active sessions
     // Admin users go directly to admin view, regular users go to dashboard
     if (currentUser.role === 'admin') {
+        loadBranches(); // Proactive load
+        loadUsers();    // Proactive load
         switchView('admin');
     } else {
         switchView('dashboard');
@@ -236,7 +241,7 @@ function initListeners() {
 /**
  * 🚀 API COMMUNICATION
  */
-const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_users'];
+const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_users', 'get_branches'];
 
 async function callAPI(action, payload = {}, silent = false) {
   // 1. DATA FETCHING (GET/JSONP) - Needed to read results from local file://
@@ -352,14 +357,8 @@ function switchView(viewName) {
   
   // If we are on index.html, we don't have view-login anymore
   $('[id^="view-"]').addClass('hidden');
+  $('.nav-item').removeClass('active');
   $(`#view-${viewName}`).removeClass('hidden'); 
-  
-  // Manage persistent navigation
-  if (viewName !== 'login') {
-      $('#persistent-nav').removeClass('hidden');
-  } else {
-      $('#persistent-nav').addClass('hidden');
-  }
 
   // Toggle Fullscreen Mode for Admin
   if (viewName === 'admin') {
@@ -436,6 +435,12 @@ async function handleLogin(e) {
     // Clear cache on login to ensure fresh data for new session
     Object.keys(localStorage).forEach(key => { if(key.startsWith('cache_')) localStorage.removeItem(key); });
     
+    // Proactive loading for admin
+    if (res.user.role === 'admin') {
+        loadBranches(); // Fetch master data early
+        loadUsers();    // Fetch users early
+    }
+    
     Swal.fire({ 
         icon: 'success', 
         title: 'สวัสดีคุณ ' + res.user.name, 
@@ -443,8 +448,7 @@ async function handleLogin(e) {
         showConfirmButton: false,
         background: 'rgba(255, 255, 255, 0.95)',
         backdrop: 'rgba(30, 58, 138, 0.2) blur(10px)'
-    }).then(async () => {
-        await loadBranches(); // Load master data after login
+    }).then(() => {
         window.location.href = 'index.html';
     });
   } else {
@@ -462,7 +466,7 @@ function logout() {
  */
 function setupDashboard() {
   $('#txtUserName').text(currentUser.name);
-  $('#txtUserBranch').text(currentUser.company || '-'); // Backend still uses 'company' field for now
+  $('#txtUserCompany').text(currentUser.company);
   const avatarUrl = currentUser.profile || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(currentUser.name)}&backgroundColor=1e3a8a`;
   $('#userAvatar').attr('src', avatarUrl);
   startCamera();
@@ -844,25 +848,48 @@ function setAdminTab(tab) {
 }
 
 function updateAdminUserFilter() {
-  if (!$('#filterStartDate').val()) {
-      const now = new Date();
-      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-      const today = now.toISOString().split('T')[0];
-      $('#filterStartDate').val(firstDay);
-      $('#filterEndDate').val(today);
-  }
-  
-  const options = ['<option value="">-- พนักงานทั้งหมด --</option>'];
-  const uniqueUsers = [...new Set(adminData.map(r => r.user_id))];
-  uniqueUsers.forEach(uid => {
-      const rec = adminData.find(r => r.user_id === uid);
-      if (rec) options.push(`<option value="${uid}">${rec.name}</option>`);
-  });
-  $('#filterUser').html(options.join(''));
+    // 1. Auto-fill dates if empty
+    if (!$('#filterStartDate').val()) {
+        const now = new Date();
+        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+        const today = now.toISOString().split('T')[0];
+        $('#filterStartDate').val(firstDay);
+        $('#filterEndDate').val(today);
+    }
+
+    // 2. Refresh User Management table
+    renderUsersTable(); 
+    
+    // 3. Update Report user dropdown based on ALL adminUsers
+    const currentVal = $('#filterUser').val(); // Preserve selection
+    const options = ['<option value="">-- พนักงานทั้งหมด --</option>'];
+    
+    // Sort users by name for better UX
+    const sortedUsers = [...adminUsers].sort((a, b) => a.first_name.localeCompare(b.first_name, 'th'));
+    
+    sortedUsers.forEach(u => {
+        options.push(`<option value="${u.id}">${u.first_name} ${u.last_name}</option>`);
+    });
+    
+    $('#filterUser').html(options.join(''));
+    if (currentVal) $('#filterUser').val(currentVal); // Restore selection
+}
+
+function resetAdminFilters() {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const today = now.toISOString().split('T')[0];
+
+    $('#filterStartDate').val(firstDay);
+    $('#filterEndDate').val(today);
+    $('#filterBranch').val('');
+    $('#filterUser').val('');
+    
+    // Refresh data
+    renderAdminLogs();
 }
 
 async function loadAdminData(force = false, silent = false) {
-  try {
   const cached = force ? null : getCache('get_admin_data');
   if (cached) { 
       adminData = cached.records; 
@@ -871,27 +898,30 @@ async function loadAdminData(force = false, silent = false) {
   }
   
   const isSilent = silent || (!!cached && !force);
+  
+  if (!isSilent) showLoading(true);
+  
   const res = await callAPI('get_admin_data', {}, isSilent);
+  
+  if (!isSilent) showLoading(false);
   if (res.success) {
     adminData = res.records;
     
-    // Ensure branches are loaded before populating filter
-    if (!allBranches || allBranches.length === 0) await loadBranches();
-    
-    if (activeAdminTab === 'logs') {
-        const branchOptions = ['<option value="">-- สาขาทั้งหมด --</option>'];
-        if (allBranches && Array.isArray(allBranches)) {
-            allBranches.forEach(b => branchOptions.push(`<option value="${b.name}">${b.name}</option>`));
-        }
-        $('#filterBranch').html(branchOptions.join(''));
+    // Ensure branches AND users are loaded
+    if (allBranches.length === 0) {
+        await loadBranches();
+    } else {
+        updateBranchFilters();
     }
-    
-    updateAdminUserFilter();
+
+    if (adminUsers.length === 0) {
+        await loadUsers();
+    } else {
+        updateAdminUserFilter();
+    }
+
     renderAdminLogs();
   }
-} catch (err) {
-  console.error('Error loading admin data:', err);
-}
 }
 
 async function loadBranches() {
@@ -899,18 +929,42 @@ async function loadBranches() {
         const res = await callAPI('get_branches', {}, true);
         if (res && res.success) {
             allBranches = res.branches || [];
+            updateBranchFilters(); // Populate dropdowns immediately when loaded
         }
     } catch (err) {
         console.error('Error loading branches:', err);
-        allBranches = allBranches || [];
+        allBranches = [];
     }
 }
+
+function updateBranchFilters() {
+    const currentBranch = $('#filterBranch').val(); // Capture current selections
+    const currentMgmtBranch = $('#userBranchFilter').val();
+
+    const options = ['<option value="">-- สาขาทั้งหมด --</option>'];
+    allBranches.forEach(b => {
+        options.push(`<option value="${b.id}">${b.name}</option>`);
+    });
+    $('#filterBranch').html(options.join(''));
+    
+    // Also update User Management branch filter
+    const userBranchOptions = ['<option value="">-- กรองตามสาขา (ทั้งหมด) --</option>'];
+    allBranches.forEach(b => {
+        userBranchOptions.push(`<option value="${b.id}">${b.name}</option>`);
+    });
+    $('#userBranchFilter').html(userBranchOptions.join(''));
+
+    // Restore selections
+    if (currentBranch) $('#filterBranch').val(currentBranch);
+    if (currentMgmtBranch) $('#userBranchFilter').val(currentMgmtBranch);
+}
+
 
 function getFilteredAdminRecords() {
   const start = $('#filterStartDate').val();
   const end = $('#filterEndDate').val();
   const userId = $('#filterUser').val();
-  const branchName = $('#filterBranch').val();
+  const branchId = $('#filterBranch').val();
   
   const startTime = start ? new Date(start + 'T00:00:00').getTime() : 0;
   const endTime = end ? new Date(end + 'T23:59:59').getTime() : Infinity;
@@ -927,7 +981,7 @@ function getFilteredAdminRecords() {
     const rTime = rDate ? rDate.getTime() : 0;
     const dateMatch = rTime >= startTime && rTime <= endTime;
     const userMatch = userId ? String(r.user_id) === String(userId) : true;
-    const branchMatch = branchName ? String(r.company) === String(branchName) : true;
+    const branchMatch = branchId ? String(r.branch_id) === String(branchId) : true;
     return dateMatch && userMatch && branchMatch;
   });
 }
@@ -990,12 +1044,19 @@ function changeAdminPage(offset) {
 
 async function loadUsers(force = false) {
   const cached = force ? null : getCache('get_users');
-  if (cached) { adminUsers = cached.users; renderUsersTable(); }
+  if (cached) { adminUsers = cached.users; renderUsersTable(); updateAdminUserFilter(); }
   
-  const res = await callAPI('get_users', {}, (!!cached && !force));
+  const isSilent = (!!cached && !force);
+  if (!isSilent) showLoading(true);
+  
+  const res = await callAPI('get_users', {}, isSilent);
+  
+  if (!isSilent) showLoading(false);
+  
   if (res.success) {
     adminUsers = res.users;
     renderUsersTable();
+    updateAdminUserFilter();
   }
 }
 
@@ -1118,7 +1179,12 @@ async function runAdminSelfTest() {
 }
 
 function renderUsersTable() {
-  $('#userTableBody').html(adminUsers.map(u => `
+  const branchFilter = $('#userBranchFilter').val();
+  const filteredUsers = adminUsers.filter(u => {
+    return branchFilter ? String(u.branch_id) === String(branchFilter) : true;
+  });
+
+  $('#userTableBody').html(filteredUsers.map(u => `
     <tr class="border-b hover:bg-slate-50 transition-colors">
       <td class="p-2">
         <div class="flex items-center gap-3">
@@ -1151,6 +1217,7 @@ function renderUsersTable() {
 }
 
 async function openAddUserModal() {
+  if (allBranches.length === 0) await loadBranches();
   // Create modal HTML
   const modalHtml = `
     <div id="add-user-modal" class="space-y-4 p-2">
@@ -1172,19 +1239,28 @@ async function openAddUserModal() {
         <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผ่าน</label>
         <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" type="password" placeholder="รหัสผ่าน (เว้นว่าง = 1234)">
       </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">สาขา <span class="text-red-500">*</span></label>
-        <select id="swal-company" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 shadow-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-100 transition-all">
-            <option value="">-- เลือกสาขา --</option>
-            ${allBranches.map(b => `<option value="${b.name}">${b.name}</option>`).join('')}
-        </select>
+      <div class="space-y-1">
+        <label class="block text-xs font-medium text-slate-600">สาขา <span class="text-red-500">*</span></label>
+        <div class="relative">
+          <select id="swal-branch" class="w-full h-11 px-4 text-sm rounded-xl border border-slate-200 bg-slate-50 outline-none focus:border-blue-500 transition-all appearance-none cursor-pointer font-bold text-slate-700">
+            ${allBranches.map(b => `<option value="${b.id}">${b.name}</option>`).join('')}
+          </select>
+          <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+            <i class="fas fa-chevron-down text-xs"></i>
+          </div>
+        </div>
       </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">สิทธิ์ผู้ใช้งาน</label>
-        <select id="swal-role" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200">
-          <option value="user">พนักงานทั่วไป</option>
-          <option value="admin">ผู้ดูแลระบบ</option>
-        </select>
+      <div class="space-y-1">
+        <label class="block text-xs font-medium text-slate-600">สิทธิ์ผู้ใช้งาน</label>
+        <div class="relative">
+          <select id="swal-role" class="w-full h-11 px-4 text-sm rounded-xl border border-slate-200 bg-slate-50 outline-none focus:border-blue-500 transition-all appearance-none cursor-pointer font-bold text-slate-700">
+            <option value="user">พนักงานทั่วไป</option>
+            <option value="admin">ผู้ดูแลระบบ</option>
+          </select>
+          <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+            <i class="fas fa-chevron-down text-xs"></i>
+          </div>
+        </div>
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-2">รูปโปรไฟล์ (ไม่บังคับ)</label>
@@ -1290,15 +1366,16 @@ async function openAddUserModal() {
       const username = document.getElementById('swal-user').value.trim();
       const first_name = document.getElementById('swal-fn').value.trim();
       const last_name = document.getElementById('swal-ln').value.trim();
-      const company = document.getElementById('swal-company').value.trim();
+      const branch_id = document.getElementById('swal-branch').value;
+      const branch_name = allBranches.find(b => b.id === branch_id)?.name || '';
       const role = document.getElementById('swal-role').value;
       
       // Validation
-      if (!username || !first_name || !last_name || !company) {
+      if (!username || !first_name || !last_name || !branch_id) {
         Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, ชื่อผู้ใช้งาน, สาขา)');
         return false;
       }
-
+      
       // Get file data
       const file = document.getElementById('swal-file').files[0];
       let profileBase64 = '';
@@ -1316,7 +1393,8 @@ async function openAddUserModal() {
         last_name,
         username,
         password: await hashPassword(document.getElementById('swal-pw').value || '1234'),
-        company,
+        branch_id,
+        company: branch_name,
         role,
         profile: profileBase64
       };
@@ -1379,11 +1457,38 @@ async function confirmDeleteUser(id) {
 }
 
 async function editUser(id) {
+    try {
+        // Only show loading if data is missing to avoid state leakage on second click
+        const needsLoading = (allBranches.length === 0 || adminUsers.length === 0);
+    
+    if (needsLoading) {
+        Swal.fire({
+            title: 'กำลังดึงข้อมูล...',
+            text: 'โปรดรอกำลังเตรียมรายละเอียดพนักงานแว็บนึงค่ะ',
+            allowOutsideClick: false,
+            didOpen: () => { Swal.showLoading(); }
+        });
+
+        try {
+            const tasks = [];
+            if (allBranches.length === 0) tasks.push(loadBranches());
+            if (adminUsers.length === 0) tasks.push(loadUsers());
+            if (tasks.length > 0) await Promise.all(tasks);
+        } catch (error) {
+            console.error('editUser data load error:', error);
+            Swal.fire('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่ค่ะ', 'error');
+            return;
+        }
+    }
+
     const u = adminUsers.find(x => x.id === id);
     if (!u) {
         Swal.fire('ข้อผิดพลาด', 'ไม่พบข้อมูลพนักงาน', 'error');
         return;
     }
+
+    // Ensure loading state is cleared if it was shown
+    if (needsLoading) Swal.close();
     
     // Create modal HTML
     const modalHtml = `
@@ -1406,19 +1511,28 @@ async function editUser(id) {
         <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผ่าน</label>
         <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" type="password" placeholder="รหัสผ่าน (เว้นว่าง = ไม่เปลี่ยน)">
       </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">สาขา <span class="text-red-500">*</span></label>
-        <select id="swal-company" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 shadow-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-100 transition-all">
-            <option value="">-- เลือกสาขา --</option>
-            ${allBranches.map(b => `<option value="${b.name}" ${u.company === b.name ? 'selected' : ''}>${b.name}</option>`).join('')}
-        </select>
+      <div class="space-y-1">
+        <label class="block text-xs font-medium text-slate-600">สาขา <span class="text-red-500">*</span></label>
+        <div class="relative">
+          <select id="swal-branch" class="w-full h-11 px-4 text-sm rounded-xl border border-slate-200 bg-slate-50 outline-none focus:border-blue-500 transition-all appearance-none cursor-pointer font-bold text-slate-700">
+            ${allBranches.map(b => `<option value="${b.id}" ${u.branch_id === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+          </select>
+          <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+            <i class="fas fa-chevron-down text-xs"></i>
+          </div>
+        </div>
       </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">สิทธิ์ผู้ใช้งาน</label>
-        <select id="swal-role" class="swal2-select !m-0 !w-full h-10 text-sm rounded-lg border-slate-200">
-          <option value="user" ${u.role === 'user' ? 'selected' : ''}>พนักงานทั่วไป</option>
-          <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>ผู้ดูแลระบบ</option>
-        </select>
+      <div class="space-y-1">
+        <label class="block text-xs font-medium text-slate-600">สิทธิ์ผู้ใช้งาน</label>
+        <div class="relative">
+          <select id="swal-role" class="w-full h-11 px-4 text-sm rounded-xl border border-slate-200 bg-slate-50 outline-none focus:border-blue-500 transition-all appearance-none cursor-pointer font-bold text-slate-700">
+            <option value="user" ${u.role === 'user' ? 'selected' : ''}>พนักงานทั่วไป</option>
+            <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>ผู้ดูแลระบบ</option>
+          </select>
+          <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+            <i class="fas fa-chevron-down text-xs"></i>
+          </div>
+        </div>
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-2">รูปโปรไฟล์ (ไม่บังคับ)</label>
@@ -1592,10 +1706,9 @@ async function editUser(id) {
             const username = document.getElementById('swal-user').value.trim();
             const first_name = document.getElementById('swal-fn').value.trim();
             const last_name = document.getElementById('swal-ln').value.trim();
-            const company = document.getElementById('swal-company').value.trim();
-            const role = document.getElementById('swal-role').value;
+            const branch_id = document.getElementById('swal-branch').value;
             
-            if (!username || !first_name || !last_name || !company) {
+            if (!username || !first_name || !last_name || !branch_id) {
                 Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, ชื่อผู้ใช้งาน, สาขา)');
                 return false;
             }
@@ -1619,13 +1732,17 @@ async function editUser(id) {
             }
             
             const pass = document.getElementById('swal-pw').value;
+            const branch_name = allBranches.find(b => b.id === branch_id)?.name || '';
+            const role = document.getElementById('swal-role').value;
+
             return { 
                 id, 
                 first_name, 
                 last_name, 
                 username, 
                 password: pass ? await hashPassword(pass) : u.password, 
-                company,
+                branch_id,
+                company: branch_name,
                 role,
                 profile: profileBase64
             };
@@ -1666,6 +1783,10 @@ async function editUser(id) {
             }
         }
     }
+  } catch (e) {
+    console.error('editUser error:', e);
+    Swal.fire('ข้อผิดพลาด', 'ไม่สามารถเตรียมข้อมูลได้ กรุณาลองใหม่ค่ะ', 'error');
+  }
 }
 
 /** 📊 REPORTING & EXPORT */
