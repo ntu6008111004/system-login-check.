@@ -284,38 +284,43 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.0.2"; // ต้องตรงกับใน Index.html และ apps-script.gs
-    const res = await callAPI('get_version', {}, true); // Silent check
+    const CURRENT_VERSION = "1.0.2"; 
+    const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
         const serverVersion = res.version;
         const localVersion = localStorage.getItem('worklogs_app_version');
         
-        // ถ้าไม่เคยมีเลขเวอร์ชัน หรือ เวอร์ชันไม่ตรงกัน
         if (!localVersion || localVersion !== serverVersion) {
-            console.log(`New version detected: ${serverVersion} (Local: ${localVersion})`);
+            console.log(`Update detected: ${serverVersion}`);
             localStorage.setItem('worklogs_app_version', serverVersion);
             
-            // ถ้าเลขเวอร์ชันหน้าเว็บ (Hardcoded) ไม่ตรงกับ Server
-            // แสดงว่าไฟล์ Index.html/app.js ที่รันอยู่น่าจะเป็น Cache
+            // หากเวอร์ชันที่รันอยู่ (ในไฟล์) ไม่ตรงกับ Server
             if (CURRENT_VERSION !== serverVersion) {
-                Swal.fire({
-                    title: 'พบเวอร์ชันใหม่!',
-                    text: 'ระบบกำลังอัปเดตเป็นเวอร์ชันล่าสุดเพื่อประสิทธิภาพที่ดีขึ้นค่ะ',
-                    icon: 'info',
-                    showConfirmButton: false,
-                    timer: 2000,
-                    allowOutsideClick: false
-                }).then(() => {
-                    // ล้าง cache และบังคับ reload
-                    Object.keys(localStorage).forEach(key => { 
-                        if(key.startsWith('cache_')) localStorage.removeItem(key); 
-                    });
+                // วิธีอัปเดตแบบ "ไม่กระทบผู้ใช้":
+                // 1. ถ้ายังไม่ Login (อยู่ที่หน้า Login) -> รีโหลดได้เลยเพราะไม่มีข้อมูลค้าง
+                // 2. ถ้า Login แล้ว -> ไม่รีโหลดทันที แต่จะล้าง cache ในรอบหน้า 
+                //    หรือรอจนกว่าผู้ใช้จะ Logout/Refresh เอง
+                
+                const isLoginPage = window.location.pathname.endsWith('login.html');
+                if (isLoginPage) {
+                    // ล้าง cache และ reload เงียบๆ
+                    clearInternalCache();
                     window.location.reload(true);
-                });
+                } else {
+                    // ถ้ากำลังใช้งานอยู่ แค่ล้าง cache ข้อมูลไว้ รอบหน้าจะโหลดใหม่เอง
+                    clearInternalCache();
+                    console.log('Background update: Cache cleared, will use new version on next manual refresh.');
+                }
             }
         }
     }
+}
+
+function clearInternalCache() {
+    Object.keys(localStorage).forEach(key => { 
+        if(key.startsWith('cache_')) localStorage.removeItem(key); 
+    });
 }
 
 // DELETED callAPIJsonp - Switching to POST-only approach
