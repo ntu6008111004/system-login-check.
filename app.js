@@ -1,4 +1,4 @@
-const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J3akFVRDZCa1RMb1JlQnlVLTNtOWVxdzBIMnN3TGIyU0l5ZzN6YjA5RXdOQ3hYMnZlMFp3UDB3aVU3VkNiMXg3MncvZXhlYw';
+const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J4VkFUbGRIelYtRzRwTVRoY0F2UlZWa3BLOE92dmJsbENsY2szLVlTNzRGUXpQb3U1d01xbmp0VWN0dFczcWhzNVUvZXhlYw==';
 const API_URL = atob(_u);
 
 // System State
@@ -48,9 +48,10 @@ const formatThaiDate = (dateStr) => {
         
         if (isNaN(date.getTime())) return dateStr;
         return date.toLocaleDateString('th-TH', {
-            day: '2-digit', month: 'short', year: 'numeric',
-            hour: '2-digit', minute: '2-digit'
-        }).replace(',', '');
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: false
+        }).replace(/\//g, '-');
     } catch (e) { return dateStr; }
 };
 
@@ -176,10 +177,74 @@ async function compressImage(base64, maxDim = 320, quality = 0.7) {
  * 🔒 SECURE PASSWORD HASHING (SHA-256)
  */
 async function hashPassword(string) {
-    const utf8 = new TextEncoder().encode(string);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', utf8);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+        try {
+            const utf8 = new TextEncoder().encode(string);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', utf8);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        } catch (e) {
+            console.warn('Crypto subtle failed, using fallback', e);
+        }
+    }
+    // Pure JS Fallback (Simplified SHA-256 or similar for non-secure contexts)
+    return sha256Fallback(string);
+}
+
+function sha256Fallback(ascii) {
+    function rightRotate(value, amount) { return (value >>> amount) | (value << (32 - amount)); }
+    const Math_pow = Math.pow;
+    const maxWord = Math_pow(2, 32);
+    const lengthProperty = 'length';
+    let i, j;
+    const result = '';
+    const words = [];
+    const asciiBitLength = ascii[lengthProperty] * 8;
+    let hash = sha256Fallback.h = sha256Fallback.h || [];
+    let k = sha256Fallback.k = sha256Fallback.k || [];
+    let primeCounter = k[lengthProperty];
+    const isPrime = function (n) {
+        for (let factor = 2; factor * factor <= n; factor++) if (n % factor === 0) return false;
+        return true;
+    };
+    const getFractionalBits = function (n) { return ((n - Math.floor(n)) * maxWord) | 0; };
+    for (let candidate = 2; primeCounter < 64; candidate++) {
+        if (isPrime(candidate)) {
+            if (primeCounter < 8) hash[primeCounter] = getFractionalBits(Math_pow(candidate, 1 / 2));
+            k[primeCounter] = getFractionalBits(Math_pow(candidate, 1 / 3));
+            primeCounter++;
+        }
+    }
+    ascii += '\x80';
+    while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
+    for (i = 0; i < ascii[lengthProperty]; i++) {
+        j = ascii.charCodeAt(i);
+        if (j >> 8) return;
+        words[i >> 2] |= j << ((3 - i) % 4) * 8;
+    }
+    words[words[lengthProperty]] = ((asciiBitLength / maxWord) | 0);
+    words[words[lengthProperty]] = (asciiBitLength | 0);
+    for (j = 0; j < words[lengthProperty]; j += 16) {
+        const w = words.slice(j, j + 16);
+        let oldHash = hash;
+        hash = hash.slice(0, 8);
+        for (i = 0; i < 64; i++) {
+            const i2 = i + j;
+            const w15 = w[i - 15], w2 = w[i - 2];
+            const a = hash[0], e = hash[4];
+            const temp1 = hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) + ((e & hash[5]) ^ (~e & hash[6])) + k[i] + (w[i] = (i < 16) ? w[i] : (w[i - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3)) + w[i - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))) | 0);
+            const temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
+            hash = [(temp1 + temp2) | 0].concat(hash);
+            hash[4] = (hash[4] + temp1) | 0;
+        }
+        for (i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+    }
+    let finalHash = '';
+    for (i = 0; i < 8; i++) {
+        const h = hash[i] >>> 0;
+        finalHash += (h.toString(16).padStart(8, '0'));
+    }
+    return finalHash;
 }
 
 $(document).ready(function() {
@@ -1799,7 +1864,13 @@ function exportToExcel() {
     const records = getFilteredAdminRecords();
     if (records.length === 0) return Swal.fire('ไม่มีข้อมูล', 'ไม่พบข้อมูลในช่วงที่เลือก', 'warning');
     
-    const data = records.map(r => ({ "ชื่อพนักงาน": r.name, "วันเวลา": r.date, "สถานะ": r.status, "พิกัด": `${r.latitude},${r.longitude}`, "ลิงก์แผนที่": r.map_link }));
+    const data = records.map(r => ({ 
+        "ชื่อพนักงาน": r.name, 
+        "วันเวลา": formatThaiDate(r.date), 
+        "สถานะ": r.status, 
+        "พิกัด": `${r.latitude},${r.longitude}`, 
+        "ลิงก์แผนที่": r.map_link 
+    }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Attendance Report");
@@ -1812,7 +1883,13 @@ function exportToCSV() {
     const records = getFilteredAdminRecords();
     if (records.length === 0) return Swal.fire('ไม่มีข้อมูล', 'ไม่พบข้อมูลในช่วงที่เลือก', 'warning');
     
-    const data = records.map(r => ({ "ชื่อพนักงาน": r.name, "วันเวลา": r.date, "สถานะ": r.status, "พิกัด": `"${(r.latitude && !isNaN(r.latitude)) ? parseFloat(r.latitude).toFixed(4) : '0.0000'}, ${(r.longitude && !isNaN(r.longitude)) ? parseFloat(r.longitude).toFixed(4) : '0.0000'}"`, "ลิงก์แผนที่": r.map_link }));
+    const data = records.map(r => ({ 
+        "ชื่อพนักงาน": r.name, 
+        "วันเวลา": formatThaiDate(r.date), 
+        "สถานะ": r.status, 
+        "พิกัด": `"${(r.latitude && !isNaN(r.latitude)) ? parseFloat(r.latitude).toFixed(4) : '0.0000'}, ${(r.longitude && !isNaN(r.longitude)) ? parseFloat(r.longitude).toFixed(4) : '0.0000'}"`, 
+        "ลิงก์แผนที่": r.map_link 
+    }));
     const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + 
         [Object.keys(data[0]).join(","), ...data.map(row => Object.values(row).join(","))].join("\n");
     const encodedUri = encodeURI(csvContent);
