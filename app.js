@@ -278,6 +278,44 @@ function initApp() {
     }
     // We are on login.html and no user, stay here.
   }
+
+  // Version Control: Check for updates on Every Refresh
+  checkAppVersion();
+}
+
+async function checkAppVersion() {
+    const CURRENT_VERSION = "1.0.2"; // ต้องตรงกับใน Index.html และ apps-script.gs
+    const res = await callAPI('get_version', {}, true); // Silent check
+    
+    if (res.success && res.version) {
+        const serverVersion = res.version;
+        const localVersion = localStorage.getItem('worklogs_app_version');
+        
+        // ถ้าไม่เคยมีเลขเวอร์ชัน หรือ เวอร์ชันไม่ตรงกัน
+        if (!localVersion || localVersion !== serverVersion) {
+            console.log(`New version detected: ${serverVersion} (Local: ${localVersion})`);
+            localStorage.setItem('worklogs_app_version', serverVersion);
+            
+            // ถ้าเลขเวอร์ชันหน้าเว็บ (Hardcoded) ไม่ตรงกับ Server
+            // แสดงว่าไฟล์ Index.html/app.js ที่รันอยู่น่าจะเป็น Cache
+            if (CURRENT_VERSION !== serverVersion) {
+                Swal.fire({
+                    title: 'พบเวอร์ชันใหม่!',
+                    text: 'ระบบกำลังอัปเดตเป็นเวอร์ชันล่าสุดเพื่อประสิทธิภาพที่ดีขึ้นค่ะ',
+                    icon: 'info',
+                    showConfirmButton: false,
+                    timer: 2000,
+                    allowOutsideClick: false
+                }).then(() => {
+                    // ล้าง cache และบังคับ reload
+                    Object.keys(localStorage).forEach(key => { 
+                        if(key.startsWith('cache_')) localStorage.removeItem(key); 
+                    });
+                    window.location.reload(true);
+                });
+            }
+        }
+    }
 }
 
 // DELETED callAPIJsonp - Switching to POST-only approach
@@ -306,7 +344,7 @@ function initListeners() {
 /**
  * 🚀 API COMMUNICATION
  */
-const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_users', 'get_branches'];
+const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_users', 'get_branches', 'get_version'];
 
 async function callAPI(action, payload = {}, silent = false) {
   // 1. DATA FETCHING (GET/JSONP) - Needed to read results from local file://
