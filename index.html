@@ -208,16 +208,24 @@
             
             <!-- Users Management Section -->
             <div id="admin-sub-users" class="admin-sub-view space-y-4">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <button onclick="openAddUserModal()" class="btn-primary py-3 text-sm w-full shadow-lg"><i class="fas fa-plus mr-2"></i> เพิ่มพนักงานใหม่</button>
-                    <div class="relative group">
-                        <select id="userBranchFilter" onchange="updateAdminUserFilter()" class="w-full bg-white border border-slate-200 text-slate-700 py-3 px-4 text-sm rounded-2xl font-black shadow-sm outline-none focus:border-blue-500 transition-all appearance-none cursor-pointer">
-                            <option value="">-- กรองตามสาขา (ทั้งหมด) --</option>
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <button onclick="openAddUserModal()" class="flex-1 bg-corporate-700 hover:bg-corporate-900 text-white py-2.5 px-4 rounded-xl font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2">
+                        <i class="fas fa-plus-circle"></i> เพิ่มพนักงานใหม่
+                    </button>
+                    <div class="relative flex-[1.5]">
+                        <select id="userBranchFilter" onchange="updateAdminUserFilter()" class="w-full bg-white border border-slate-200 text-slate-700 py-2.5 px-4 pr-10 text-xs rounded-xl font-bold shadow-sm outline-none focus:border-blue-500 transition-all appearance-none cursor-pointer">
+                            <option value="">-- กรองดามสาขา (ทั้งหมด) --</option>
                         </select>
-                        <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 group-hover:text-blue-500 transition-colors">
-                            <i class="fas fa-chevron-down text-xs"></i>
+                        <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                            <i class="fas fa-filter text-[10px]"></i>
                         </div>
                     </div>
+                </div>
+
+                <div class="flex items-center gap-2 p-1.5 bg-rose-50 border border-rose-100 rounded-xl">
+                    <button onclick="confirmResetAllPasswords()" class="w-full py-2 text-[10px] font-black text-rose-500 hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center gap-2 rounded-lg">
+                        <i class="fas fa-key"></i> รีเซ็ตรหัสพนักงานทุกคนเป็น 1234
+                    </button>
                 </div>
                 
                 <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
@@ -264,10 +272,24 @@
                         </div>
                     </div>
                     <div class="flex flex-wrap gap-2 pt-2">
-                        <button onclick="loadAdminData()" class="btn-primary flex-1 py-2 text-xs min-w-[120px]"><i class="fas fa-search mr-1"></i> กรองข้อมูล</button>
-                        <button onclick="resetAdminFilters()" class="bg-slate-200 text-slate-700 rounded-xl px-4 py-2 text-xs font-bold hover:bg-slate-300 transition-colors flex items-center gap-1"><i class="fas fa-sync-alt"></i> ล้างค่า</button>
-                        <button onclick="exportToExcel()" class="bg-emerald-500 text-white rounded-xl px-4 py-2 text-xs font-bold shadow-lg shadow-emerald-200 flex items-center gap-2"><i class="fas fa-file-excel"></i> Excel</button>
-                        <button onclick="exportToCSV()" class="bg-blue-500 text-white rounded-xl px-4 py-2 text-xs font-bold shadow-lg shadow-blue-200 flex items-center gap-2"><i class="fas fa-file-csv"></i> CSV</button>
+                    <div class="flex flex-wrap items-end gap-3 pt-2">
+                        <div class="flex-1 min-w-[140px]">
+                            <button onclick="loadAdminData()" class="w-full bg-corporate-700 hover:bg-corporate-900 text-white py-2.5 px-4 rounded-xl font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2">
+                                <i class="fas fa-search text-[10px]"></i> กรองข้อมูล
+                            </button>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="resetAdminFilters()" class="w-10 h-10 bg-slate-100 text-slate-500 rounded-xl hover:bg-slate-200 transition-all flex items-center justify-center" title="ล้างค่า">
+                                <i class="fas fa-sync-alt text-[10px]"></i>
+                            </button>
+                            <button onclick="exportToExcel()" class="bg-emerald-50 text-emerald-600 border border-emerald-100 px-4 py-2.5 rounded-xl text-xs font-black hover:bg-emerald-600 hover:text-white transition-all flex items-center gap-2 shadow-sm">
+                                <i class="fas fa-file-excel"></i> Excel
+                            </button>
+                            <button onclick="exportToCSV()" class="bg-blue-50 text-blue-600 border border-blue-100 px-4 py-2.5 rounded-xl text-xs font-black hover:bg-blue-600 hover:text-white transition-all flex items-center gap-2 shadow-sm">
+                                <i class="fas fa-file-csv"></i> CSV
+                            </button>
+                        </div>
+                    </div>
                     </div>
                 </div>
 
@@ -329,6 +351,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="app.js?v=1.0.2"></script>
+  <script src="app.js?v=1.0.3"></script>
 </body>
 </html>

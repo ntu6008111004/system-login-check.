@@ -1,4 +1,4 @@
-const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J6bnpYblR1TTFZcUpEUG9pUWVYWXdnQ25UcWdwbmd5anNLVFFaNTdRMk9LbHJMS0x6WDluUy1pbE1Qd2ZIVE51dV8vZXhlYw==';
+const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J3UklaMFV5ZEczRzZ3ZTdDWUZCcmlrMDd5VkZtTEVwQU5HVU5JM25HYmlIX2NhemZnSEhUZmVHRXBibGFET2U0M3QvZXhlYw==';
 const API_URL = atob(_u);
 
 // System State
@@ -177,18 +177,17 @@ async function compressImage(base64, maxDim = 320, quality = 0.7) {
  * 🔒 SECURE PASSWORD HASHING (SHA-256)
  */
 async function hashPassword(string) {
-    if (typeof crypto !== 'undefined' && crypto.subtle) {
-        try {
-            const utf8 = new TextEncoder().encode(string);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', utf8);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        } catch (e) {
-            console.warn('Crypto subtle failed, using fallback', e);
-        }
+    if (!string) return "";
+    return btoa(unescape(encodeURIComponent(string)));
+}
+
+function decodePassword(encoded) {
+    if (!encoded) return "";
+    try {
+        return decodeURIComponent(escape(atob(encoded)));
+    } catch (e) {
+        return encoded; // Return as is if not base64
     }
-    // Pure JS Fallback (Simplified SHA-256 or similar for non-secure contexts)
-    return sha256Fallback(string);
 }
 
 function sha256Fallback(ascii) {
@@ -284,7 +283,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.0.2"; 
+    const CURRENT_VERSION = "1.0.5"; 
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -1137,8 +1136,8 @@ function renderAdminLogs() {
         ${(r.latitude !== undefined && r.latitude !== null && !isNaN(parseFloat(r.latitude))) ? parseFloat(r.latitude).toFixed(4) : '0.0000'}, 
         ${(r.longitude !== undefined && r.longitude !== null && !isNaN(parseFloat(r.longitude))) ? parseFloat(r.longitude).toFixed(4) : '0.0000'}
       </td>
-      <td class="p-4 text-center">
-        <a href="${r.map_link}" target="_blank" class="w-8 h-8 bg-blue-50 text-blue-500 rounded-lg inline-flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all shadow-sm shadow-blue-100"><i class="fas fa-map-marked-alt text-xs"></i></a>
+      <td class="p-3 text-center">
+        <a href="${r.map_link}" target="_blank" class="w-7 h-7 bg-blue-50 text-blue-500 rounded-lg inline-flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all shadow-sm shadow-blue-100"><i class="fas fa-map-marked-alt text-[10px]"></i></a>
       </td>
     </tr>
   `).join(''));
@@ -1311,12 +1310,12 @@ function renderUsersTable() {
       </td>
       <td class="p-2 text-slate-600 text-sm">${u.company || '-'}</td>
       <td class="p-2 text-center">
-        <div class="flex justify-center gap-2">
-          <button onclick="editUser('${u.id}')" class="w-8 h-8 bg-blue-500 hover:bg-blue-600 text-white rounded-lg flex items-center justify-center shadow-sm transition-colors" title="แก้ไข">
-            <i class="fas fa-edit text-xs"></i>
+        <div class="flex justify-center gap-1.5">
+          <button onclick="editUser('${u.id}')" class="w-7 h-7 bg-blue-500 hover:bg-blue-600 text-white rounded-lg flex items-center justify-center shadow-sm transition-colors" title="แก้ไข">
+            <i class="fas fa-edit text-[10px]"></i>
           </button>
-          <button onclick="confirmDeleteUser('${u.id}')" class="w-8 h-8 bg-rose-500 hover:bg-rose-600 text-white rounded-lg flex items-center justify-center shadow-sm transition-colors" title="ลบ">
-            <i class="fas fa-trash text-xs"></i>
+          <button onclick="confirmDeleteUser('${u.id}')" class="w-7 h-7 bg-rose-500 hover:bg-rose-600 text-white rounded-lg flex items-center justify-center shadow-sm transition-colors" title="ลบ">
+            <i class="fas fa-trash text-[10px]"></i>
           </button>
         </div>
       </td>
@@ -1343,9 +1342,14 @@ async function openAddUserModal() {
         <label class="block text-xs font-medium text-slate-600 mb-1">ชื่อผู้ใช้งาน <span class="text-red-500">*</span></label>
         <input id="swal-user" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" placeholder="ชื่อผู้ใช้สำหรับล็อกอิน">
       </div>
-      <div>
+      <div class="relative">
         <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผ่าน</label>
-        <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" type="password" placeholder="รหัสผ่าน (เว้นว่าง = 1234)">
+        <div class="relative">
+          <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 pr-10" type="password" placeholder="รหัสผ่าน (เว้นว่าง = 1234)">
+          <button type="button" id="toggle-pw" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
+            <i class="fas fa-eye-slash text-sm"></i>
+          </button>
+        </div>
       </div>
       <div class="space-y-1">
         <label class="block text-xs font-medium text-slate-600">สาขา <span class="text-red-500">*</span></label>
@@ -1433,6 +1437,16 @@ async function openAddUserModal() {
       const removeBtn = document.getElementById('swal-remove-file');
       const uploadLabel = document.getElementById('upload-label');
       const previewClickable = document.getElementById('preview-clickable');
+      const togglePw = document.getElementById('toggle-pw');
+      const pwInput = document.getElementById('swal-pw');
+
+      if (togglePw && pwInput) {
+        togglePw.addEventListener('click', () => {
+          const isPass = pwInput.type === 'password';
+          pwInput.type = isPass ? 'text' : 'password';
+          togglePw.innerHTML = `<i class="fas ${isPass ? 'fa-eye' : 'fa-eye-slash'} text-sm"></i>`;
+        });
+      }
       
       // Click to view full size image
       if (previewClickable) {
@@ -1617,7 +1631,12 @@ async function editUser(id) {
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผ่าน</label>
-        <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" type="password" placeholder="รหัสผ่าน (เว้นว่าง = ไม่เปลี่ยน)">
+        <div class="relative">
+          <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 pr-10" type="password" placeholder="รหัสผ่าน" value="${decodePassword(u.password)}">
+          <button type="button" id="toggle-pw-edit" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors z-50 bg-transparent border-none p-2 cursor-pointer focus:outline-none outline-none" style="box-shadow: none;">
+            <i class="fas fa-eye-slash text-sm"></i>
+          </button>
+        </div>
       </div>
       <div class="space-y-1">
         <label class="block text-xs font-medium text-slate-600">สาขา <span class="text-red-500">*</span></label>
@@ -1744,6 +1763,16 @@ async function editUser(id) {
             const cancelNewFile = document.getElementById('cancel-new-file');
             const removeBtn = document.getElementById('swal-remove-file');
             const changePhotoLabel = document.getElementById('change-photo-label');
+            const togglePw = document.getElementById('toggle-pw-edit');
+            const pwInput = document.getElementById('swal-pw');
+
+            if (togglePw && pwInput) {
+                togglePw.addEventListener('click', () => {
+                    const isPass = pwInput.type === 'password';
+                    pwInput.type = isPass ? 'text' : 'password';
+                    togglePw.innerHTML = `<i class="fas ${isPass ? 'fa-eye' : 'fa-eye-slash'} text-sm"></i>`;
+                });
+            }
             
             // Click to view current profile image
             if (currentProfileClickable) {
@@ -1840,6 +1869,11 @@ async function editUser(id) {
             }
             
             const pass = document.getElementById('swal-pw').value;
+            // SMART HASH: Only hash if user actually changed the password field 
+            // and it's not and the new value isn't already the hash we pulled.
+            const isPasswordChanged = (pass !== u.password);
+            const finalPassword = isPasswordChanged ? await hashPassword(pass) : u.password;
+
             const branch_name = allBranches.find(b => b.id === branch_id)?.name || '';
             const role = document.getElementById('swal-role').value;
 
@@ -1848,7 +1882,7 @@ async function editUser(id) {
                 first_name, 
                 last_name, 
                 username, 
-                password: pass ? await hashPassword(pass) : u.password, 
+                password: finalPassword, 
                 branch_id,
                 company: branch_name,
                 role,
@@ -1968,6 +2002,26 @@ async function triggerMockData() {
             }).then(() => {
                 logout();
             });
+        }
+    }
+}
+
+async function confirmResetAllPasswords() {
+    const result = await Swal.fire({
+        title: 'ยืนยันการรีเซ็ตรหัสทั้งหมด?',
+        text: "รหัสพนักงานทุกคนจะถูกเปลี่ยนเป็น 1234 ทันทีเพื่อความสะดวกในการจัดการครับ",
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#e11d48',
+        confirmButtonText: 'ตกลง, รีเซ็ตเลย',
+        cancelButtonText: 'ยกเลิก'
+    });
+
+    if (result.isConfirmed) {
+        const res = await callAPI('reset_all_passwords');
+        if (res.success) {
+            Swal.fire('รีเซ็ตสำเร็จ', res.message, 'success');
+            loadUsers();
         }
     }
 }
