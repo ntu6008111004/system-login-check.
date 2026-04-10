@@ -16,6 +16,8 @@ let allBranches = [];
 // AI State
 let faceDetection = null;
 let activeLoadings = 0; // Global counter for async tasks
+let lastDetectionTime = 0; // For iOS throttling
+const DETECTION_INTERVAL = 200; // ms (Target 5-6 FPS for mobile stability)
 /**
  * 🎨 UI COMPONENTS
  */
@@ -263,9 +265,48 @@ function sha256Fallback(ascii) {
 }
 
 $(document).ready(function() {
+  handleLineBreakout();
   initApp();
   initListeners();
 });
+
+/**
+ * 📱 LINE BROWSER GUARDIAN
+ */
+function handleLineBreakout() {
+    const ua = navigator.userAgent || navigator.vendor || window.opera;
+    const isLine = /Line\//i.test(ua);
+    if (!isLine) return;
+
+    const currentUrl = window.location.href;
+    // Android "openExternalBrowser=1" trick
+    if (!currentUrl.includes('openExternalBrowser=1')) {
+        const separator = currentUrl.includes('?') ? '&' : '?';
+        const breakoutUrl = currentUrl + separator + 'openExternalBrowser=1';
+        
+        Swal.fire({
+            title: 'แนะนำให้ใช้ Safari หรือ Chrome',
+            html: `
+                <div class="text-left space-y-3 text-sm">
+                    <p class="font-bold text-rose-600">⚠️ พบว่าคุณกำลังใช้งานผ่าน LINE Browser</p>
+                    <p>การลงเวลาผ่าน LINE อาจพบปัญหาเรื่องกล้องและความจำเครื่องได้ครับ</p>
+                    <div class="bg-blue-50 p-3 rounded-lg border border-blue-100 italic text-[11px]">
+                        "แนะนำให้กดปุ่ม <b>... (3 จุด)</b> มุมขวาบน <br>แล้วเลือก <b>Open in default browser</b> ค่ะ"
+                    </div>
+                </div>
+            `,
+            icon: 'info',
+            confirmButtonText: 'เปิดในเบราว์เซอร์ปกติ',
+            confirmButtonColor: '#3b82f6',
+            allowOutsideClick: false,
+            allowEscapeKey: false
+        }).then((result) => {
+            if (result.isConfirmed) {
+                window.location.href = breakoutUrl;
+            }
+        });
+    }
+}
 
 function initApp() {
   const isLoginPage = window.location.pathname.endsWith('login.html');
@@ -670,7 +711,11 @@ async function startCamera() {
     camera = new Camera(videoElement, {
       onFrame: async () => {
         if (faceDetection && !lastCapturedPhoto) {
-          await faceDetection.send({image: videoElement});
+          const now = Date.now();
+          if (now - lastDetectionTime > DETECTION_INTERVAL) {
+            lastDetectionTime = now;
+            await faceDetection.send({image: videoElement});
+          }
         }
       },
       width: 480, height: 480
@@ -704,7 +749,7 @@ function initFaceDetection() {
   
   faceDetection.setOptions({
     model: 'short',
-    minDetectionConfidence: 0.5
+    minDetectionConfidence: 0.4 // Slightly lower for iOS/mobile light conditions
   });
   
   faceDetection.onResults(onFaceResults);
@@ -722,8 +767,8 @@ function onFaceResults(results) {
     const centerX = detect.xCenter;
     const centerY = detect.yCenter;
     
-    // Check if center of face is within +/- 15% of the frame center
-    const tolerance = 0.15;
+    // Check if center of face is within +/- 20% of the frame center (More lenient for mobile)
+    const tolerance = 0.20;
     const dist = Math.sqrt(Math.pow(centerX - 0.5, 2) + Math.pow(centerY - 0.5, 2));
     
     if (dist < tolerance) {
