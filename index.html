@@ -32,7 +32,7 @@
     }
   </script>
 
-  <link rel="stylesheet" href="style.css?v=1.0.2">
+  <link rel="stylesheet" href="style.css?v=1.1.0">
 </head>
 <body class="bg-corporate-50 min-h-screen text-slate-800 antialiased font-sans">
 
@@ -279,7 +279,7 @@
                             </button>
                         </div>
                         <div class="flex gap-2">
-                            <button onclick="resetAdminFilters()" class="w-10 h-10 bg-slate-100 text-slate-500 rounded-xl hover:bg-slate-200 transition-all flex items-center justify-center" title="ล้างค่า">
+                            <button id="btnReloadAdmin" class="w-10 h-10 bg-slate-100 text-slate-500 rounded-xl hover:bg-slate-200 transition-all flex items-center justify-center border border-slate-200" title="รีเฟรชข้อมูล">
                                 <i class="fas fa-sync-alt text-[10px]"></i>
                             </button>
                             <button onclick="exportToExcel()" class="bg-emerald-50 text-emerald-600 border border-emerald-100 px-4 py-2.5 rounded-xl text-xs font-black hover:bg-emerald-600 hover:text-white transition-all flex items-center gap-2 shadow-sm">
@@ -351,6 +351,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="app.js?v=1.0.3"></script>
+  <script src="app.js?v=1.1.0"></script>
 </body>
 </html>

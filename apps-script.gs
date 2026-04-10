@@ -3,8 +3,8 @@
  */
 
 function logToSheet(action, type, data) {
-  // Skip verbose read actions to prevent log bloat
-  const skipActions = ["get_admin_data", "get_history", "get_users"];
+  // Skip verbose or sensitive actions to prevent log bloat and data leaks
+  const skipActions = ["get_admin_data", "get_history", "get_users", "login"];
   if (skipActions.includes(action)) return;
 
   try {
@@ -16,7 +16,7 @@ function logToSheet(action, type, data) {
     }
     logSheet.appendRow([new Date(), action, type, JSON.stringify(data)]);
   } catch (e) {
-    console.error("Logging failed", e);
+    // Fail silently in logs
   }
 }
 

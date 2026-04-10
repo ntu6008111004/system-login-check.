@@ -15,6 +15,22 @@ let allBranches = [];
 
 // AI State
 let faceDetection = null;
+let activeLoadings = 0; // Global counter for async tasks
+/**
+ * 🎨 UI COMPONENTS
+ */
+function showLoading(show) {
+  if (show) {
+    activeLoadings++;
+    if (activeLoadings === 1) $('#loading-overlay').css('display', 'flex').show();
+  } else {
+    activeLoadings--;
+    if (activeLoadings <= 0) {
+      activeLoadings = 0;
+      $('#loading-overlay').hide();
+    }
+  }
+}
 let isFaceInFrame = false;
 let camera = null;
 let isPhotoConfirmed = false;
@@ -283,7 +299,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.0.5"; 
+    const CURRENT_VERSION = "1.1.0"; 
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -291,7 +307,7 @@ async function checkAppVersion() {
         const localVersion = localStorage.getItem('worklogs_app_version');
         
         if (!localVersion || localVersion !== serverVersion) {
-            console.log(`Update detected: ${serverVersion}`);
+
             localStorage.setItem('worklogs_app_version', serverVersion);
             
             // หากเวอร์ชันที่รันอยู่ (ในไฟล์) ไม่ตรงกับ Server
@@ -309,7 +325,7 @@ async function checkAppVersion() {
                 } else {
                     // ถ้ากำลังใช้งานอยู่ แค่ล้าง cache ข้อมูลไว้ รอบหน้าจะโหลดใหม่เอง
                     clearInternalCache();
-                    console.log('Background update: Cache cleared, will use new version on next manual refresh.');
+
                 }
             }
         }
@@ -320,6 +336,37 @@ function clearInternalCache() {
     Object.keys(localStorage).forEach(key => { 
         if(key.startsWith('cache_')) localStorage.removeItem(key); 
     });
+}
+
+/**
+ * 💾 SAFE STORAGE UTILITY
+ * Prevents app crashing when localStorage is full
+ */
+function safeCacheItem(key, data) {
+    if (!key || !data) return;
+    const stringData = JSON.stringify(data);
+    try {
+        localStorage.setItem(key, stringData);
+    } catch (e) {
+        // Handle QuotaExceededError across different browsers
+        if (e.name === 'QuotaExceededError' || 
+            e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || 
+            e.code === 22) {
+            
+            console.warn('LocalStorage quota exceeded. Purging caches...');
+            clearInternalCache();
+            
+            try {
+                localStorage.setItem(key, stringData);
+                console.log('Successfully cached after purge.');
+            } catch (retryError) {
+                // If it still fails, the single item is likely > 5MB
+                console.error('Item too large for LocalStorage even after purge:', (stringData.length / 1024).toFixed(2), 'KB');
+            }
+        } else {
+            console.error('LocalStorage Save Error:', e);
+        }
+    }
 }
 
 // DELETED callAPIJsonp - Switching to POST-only approach
@@ -335,6 +382,8 @@ function initListeners() {
     adminCurrentPage = 1;
     renderAdminLogs();
   });
+  
+  $(document).on('click', '#btnReloadAdmin', resetAdminFilters);
 
   // Photo Listeners
   $(document).on('click', '#btnRetake', retakePhoto);
@@ -410,7 +459,7 @@ function callAPIJsonp(action, payload = {}, silent = false) {
       // Smart Unified Caching
       if (data && data.success) {
         const cacheKey = `cache_${action}_${payload.user_id || 'global'}`;
-        localStorage.setItem(cacheKey, JSON.stringify(data));
+        safeCacheItem(cacheKey, data);
       }
       resolve(data);
     };
@@ -438,7 +487,7 @@ function getCache(action, userId = 'global') {
  */
 function startAdminPolling() {
     if (adminPollInterval) return;
-    console.log('Admin Polling Started (15s)');
+
     adminPollInterval = setInterval(() => {
         if (currentUser && currentUser.role === 'admin') {
             loadAdminData(true, true); // Force AND Silent refresh
@@ -452,7 +501,7 @@ function stopAdminPolling() {
     if (adminPollInterval) {
         clearInterval(adminPollInterval);
         adminPollInterval = null;
-        console.log('Admin Polling Stopped');
+
     }
 }
 
@@ -520,10 +569,6 @@ function switchView(viewName) {
   }
 }
 
-function showLoading(show) {
-  if (show) $('#loading-overlay').css('display', 'flex').show();
-  else $('#loading-overlay').hide();
-}
 
 /**
  * 🔐 AUTH
@@ -532,12 +577,12 @@ async function handleLogin(e) {
   e.preventDefault();
   const username = $('#username').val();
   const rawPassword = $('#password').val();
-  const password = await hashPassword(rawPassword); // Hash with SHA-256
+  const password = await hashPassword(rawPassword);
   const remember = $('#chkRemember').is(':checked');
-  const res = await callAPI('login', { username, password: password });
+  const res = await callAPI('login', { username, password });
   if (res.success) {
     currentUser = res.user;
-    if (remember) localStorage.setItem('worklogs_user', JSON.stringify(res.user));
+    if (remember) safeCacheItem('worklogs_user', res.user);
     
     // Clear cache on login to ensure fresh data for new session
     Object.keys(localStorage).forEach(key => { if(key.startsWith('cache_')) localStorage.removeItem(key); });
@@ -849,7 +894,8 @@ async function loadHistory(force = false) {
     renderHistoryFiltered();
   }
   
-  const res = await callAPI('get_history', { user_id: currentUser.id }, (!!cached && !force));
+  // Manual load always shows loading spinner to ensure data integrity
+  const res = await callAPI('get_history', { user_id: currentUser.id }, false); 
   if (res.success) {
     personalHistoryData = res.history;
     renderHistoryFiltered();
@@ -982,7 +1028,7 @@ function updateAdminUserFilter() {
     if (currentVal) $('#filterUser').val(currentVal); // Restore selection
 }
 
-function resetAdminFilters() {
+async function resetAdminFilters() {
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
     const today = now.toISOString().split('T')[0];
@@ -992,8 +1038,17 @@ function resetAdminFilters() {
     $('#filterBranch').val('');
     $('#filterUser').val('');
     
-    // Refresh data
-    renderAdminLogs();
+    // Actually reload data from server
+    await loadAdminData(true); 
+    
+    Swal.fire({
+        icon: 'success',
+        title: 'อัปเดตข้อมูลเรียบร้อย',
+        timer: 1000,
+        showConfirmButton: false,
+        toast: true,
+        position: 'top-end'
+    });
 }
 
 async function loadAdminData(force = false, silent = false) {
@@ -1004,13 +1059,12 @@ async function loadAdminData(force = false, silent = false) {
       renderAdminLogs(); 
   }
   
-  const isSilent = silent || (!!cached && !force);
-  
-  if (!isSilent) showLoading(true);
+  // Background polling (silent=true) keeps UI responsive. 
+  // Manual/Tab calls (silent=false) will block to prevent user error.
+  const isSilent = silent; 
   
   const res = await callAPI('get_admin_data', {}, isSilent);
   
-  if (!isSilent) showLoading(false);
   if (res.success) {
     adminData = res.records;
     
@@ -1149,16 +1203,12 @@ function changeAdminPage(offset) {
     $('#admin-sub-logs').parent().scrollTop(0);
 }
 
-async function loadUsers(force = false) {
+async function loadUsers(force = false, silent = false) {
   const cached = force ? null : getCache('get_users');
   if (cached) { adminUsers = cached.users; renderUsersTable(); updateAdminUserFilter(); }
   
-  const isSilent = (!!cached && !force);
-  if (!isSilent) showLoading(true);
-  
+  const isSilent = silent;
   const res = await callAPI('get_users', {}, isSilent);
-  
-  if (!isSilent) showLoading(false);
   
   if (res.success) {
     adminUsers = res.users;
