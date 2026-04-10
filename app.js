@@ -344,7 +344,15 @@ function clearInternalCache() {
  */
 function safeCacheItem(key, data) {
     if (!key || !data) return;
-    const stringData = JSON.stringify(data);
+    
+    let processedData = data;
+    // Intelligent Truncation: If admin data is too large, cache only most recent 150 records
+    // This ensures fast initial load without hitting 5MB LocalStorage limit
+    if (key.includes('get_admin_data') && data.records && data.records.length > 150) {
+        processedData = { ...data, records: data.records.slice(0, 150) };
+    }
+
+    const stringData = JSON.stringify(processedData);
     try {
         localStorage.setItem(key, stringData);
     } catch (e) {
@@ -752,7 +760,13 @@ function capturePhoto() {
   ctx.drawImage(v, 0, 0, c.width, c.height);
   ctx.restore();
   
-  lastCapturedPhoto = c.toDataURL('image/webp', 0.6); // Lower quality for stability
+  let dataUrl = c.toDataURL('image/webp', 0.6);
+  // Fallback to JPEG if WebP is not supported (toDataURL returns image/png if type is unsupported)
+  if (!dataUrl.startsWith('data:image/webp')) {
+    dataUrl = c.toDataURL('image/jpeg', 0.6);
+  }
+  
+  lastCapturedPhoto = dataUrl;
   isPhotoConfirmed = false;
   
   // Show Review UI
@@ -1052,36 +1066,64 @@ async function resetAdminFilters() {
 }
 
 async function loadAdminData(force = false, silent = false) {
-  const cached = force ? null : getCache('get_admin_data');
-  if (cached) { 
-      adminData = cached.records; 
-      updateAdminUserFilter(); 
-      renderAdminLogs(); 
-  }
-  
-  // Background polling (silent=true) keeps UI responsive. 
-  // Manual/Tab calls (silent=false) will block to prevent user error.
   const isSilent = silent; 
+  if (!isSilent) showLoading(true);
   
-  const res = await callAPI('get_admin_data', {}, isSilent);
-  
-  if (res.success) {
-    adminData = res.records;
+  try {
+    const cached = force ? null : getCache('get_admin_data');
+    if (cached) { 
+        adminData = cached.records; 
+        updateAdminUserFilter(); 
+        renderAdminLogs(); 
+    }
     
-    // Ensure branches AND users are loaded
-    if (allBranches.length === 0) {
-        await loadBranches();
-    } else {
-        updateBranchFilters();
-    }
+    // Background polling (silent=true) keeps UI responsive. 
+    // Manual/Tab calls (silent=false) will block to prevent user error.
+    const res = await callAPI('get_admin_data', {}, true); // Always silent inside to avoid flickering
+    
+    if (res.success) {
+      adminData = res.records;
+      
+      // Ensure branches AND users are loaded
+      if (allBranches.length === 0) {
+          await loadBranches();
+      } else {
+          updateBranchFilters();
+      }
 
-    if (adminUsers.length === 0) {
-        await loadUsers();
-    } else {
-        updateAdminUserFilter();
-    }
+      if (adminUsers.length === 0) {
+          await loadUsers(false, true); // Silent nested call
+      } else {
+          updateAdminUserFilter();
+      }
 
-    renderAdminLogs();
+      renderAdminLogs();
+    }
+  } finally {
+    if (!isSilent) showLoading(false);
+  }
+}
+
+async function loadUsers(force = false, silent = false) {
+  const isSilent = silent;
+  if (!isSilent) showLoading(true);
+  
+  try {
+    const cached = force ? null : getCache('get_users');
+    if (cached) { adminUsers = cached.users; renderUsersTable(); updateAdminUserFilter(); }
+    
+    // Always fetch latest from server silently if we already have cache, or if requested silent
+    const res = await callAPI('get_users', {}, true); 
+    
+    if (res.success) {
+      adminUsers = res.users;
+      renderUsersTable();
+      updateAdminUserFilter();
+      // Only cache if successful
+      safeCacheItem('cache_get_users_global', res);
+    }
+  } finally {
+    if (!isSilent) showLoading(false);
   }
 }
 
@@ -1281,7 +1323,20 @@ async function runAdminSelfTest() {
     push('get_users (after create)', !!found1, found1 ? `พบ user id: ${createdUserId}` : 'ไม่พบผู้ใช้ทดสอบ');
     push('profile saved (after create)', !!(found1 && found1.profile && String(found1.profile).startsWith('data:image/')), found1?.profile ? 'มีค่า profile' : 'profile ว่าง/ไม่มี');
 
-    // 3) update_user
+    // 3) save_attendance (MOCK PHOTO TEST)
+    if (createdUserId) {
+      const mockWebp = 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TAYAAAAvQWxvAGs='; // Minimal valid WebP
+      const attRes = await callAPI('save_attendance', {
+        user_id: createdUserId,
+        status: 'เข้างาน',
+        latitude: 13.75,
+        longitude: 100.5,
+        selfie_base64: mockWebp
+      });
+      push('save_attendance (WebP Pipeline)', !!attRes.success, attRes.success ? 'บันทึกรูปทดสอบสำเร็จ' : 'บันทึกรูปล้มเหลว');
+    }
+
+    // 4) update_user
     if (createdUserId) {
       const newCompany = `${testCompany}_UPDATED`;
       const updateRes = await callAPI('update_user', {
@@ -1822,6 +1877,20 @@ async function editUser(id) {
                     pwInput.type = isPass ? 'text' : 'password';
                     togglePw.innerHTML = `<i class="fas ${isPass ? 'fa-eye' : 'fa-eye-slash'} text-sm"></i>`;
                 });
+                
+                // Add System Test UI
+                const container = pwInput.parentElement.parentElement;
+                container.insertAdjacentHTML('beforeend', `
+                    <button onclick="triggerMockData()" class="btn-primary w-full py-3 mt-4">สร้างข้อมูลสมมติ 7 วัน</button>
+                    
+                    <div class="pt-6 border-t border-slate-100 mt-6">
+                        <h4 class="font-black text-slate-800 text-sm">ตรวจสอบสถานะระบบ</h4>
+                        <p class="text-slate-400 text-[10px] mt-1 leading-relaxed">ทดสอบการเชื่อมต่อ API, การสร้างผู้ใช้ และการบันทึกรูปภาพ WebP</p>
+                        <button onclick="runAdminSelfTest()" class="w-full mt-4 py-3 bg-slate-800 text-white rounded-xl font-bold text-xs hover:bg-black transition-all shadow-lg">
+                           <i class="fas fa-microscope mr-2"></i> รันระบบทดสอบ (Full Pipeline Test)
+                        </button>
+                    </div>
+                `);
             }
             
             // Click to view current profile image

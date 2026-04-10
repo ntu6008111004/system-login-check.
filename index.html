@@ -331,6 +331,14 @@
                         <p class="text-slate-400 text-xs mt-2 leading-relaxed">สำหรับสร้างข้อมูลสมมติเพื่อทดสอบการแสดงผลตารางและรางานครับ</p>
                     </div>
                     <button onclick="triggerMockData()" class="btn-primary w-full py-3 mt-4">สร้างข้อมูลสมมติ 7 วัน</button>
+                    
+                    <div class="pt-6 border-t border-slate-100 mt-6">
+                        <h4 class="font-black text-slate-800 text-sm">ตรวจสอบสถานะระบบ</h4>
+                        <p class="text-slate-400 text-[10px] mt-1 leading-relaxed">ทดสอบการเชื่อมต่อ API, การสร้างผู้ใช้ และการบันทึกรูปภาพ WebP</p>
+                        <button id="btnRunSelfTest" onclick="runAdminSelfTest()" class="w-full mt-4 py-3 bg-slate-800 text-white rounded-xl font-bold text-xs hover:bg-black transition-all shadow-lg">
+                           <i class="fas fa-microscope mr-2"></i> รันระบบทดสอบ (Full Pipeline Test)
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
