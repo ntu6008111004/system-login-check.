@@ -2189,3 +2189,127 @@ async function confirmResetAllPasswords() {
         }
     }
 }
+
+async function requestPermissionsManual() {
+    // Check if insecure origin
+    const isInsecure = window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+    const isFile = window.location.protocol === 'file:';
+
+    let protocolWarning = '';
+    if (isFile) {
+        protocolWarning = `
+            <div class="bg-amber-50 p-3 rounded-lg border border-amber-200 text-amber-800 text-xs mb-3 text-left">
+                <i class="fas fa-exclamation-triangle"></i> <b>ตรวจพบการใช้งานผ่านไฟล์ (file://)</b><br>
+                เบราว์เซอร์ส่วนใหญ่มักจะบล็อกกล้องและ GPS เมื่อเปิดไฟล์โดยตรงจากเครื่องครับ แนะนำให้รันผ่าน Web Server หรือเปิดผ่าน localhost แทนครับ
+            </div>
+        `;
+    } else if (isInsecure) {
+        protocolWarning = `
+            <div class="bg-amber-50 p-3 rounded-lg border border-amber-200 text-amber-800 text-xs mb-3 text-left">
+                <i class="fas fa-exclamation-triangle"></i> <b>การเชื่อมต่อไม่ปลอดภัย (HTTP)</b><br>
+                เบราว์เซอร์จะอนุญาตให้ใช้กล้อง/GPS เฉพาะบน HTTPS หรือ localhost เท่านั้นครับ
+            </div>
+        `;
+    }
+
+    Swal.fire({
+        title: 'ตรวจสอบสิทธิ์ กล้อง & GPS',
+        html: `
+            <div class="text-left text-sm space-y-3">
+                ${protocolWarning}
+                <p>ระบบจะทำการขอสิทธิ์ <b>กล้องถ่ายรูป</b> และ <b>พิกัด GPS</b> เพื่อใช้ในการลงเวลาครับ</p>
+                <p class="text-rose-600 font-bold text-xs">⚠️ หากคุณเคยกด "ไม่อนุญาต" (Block) ไปแล้ว ระบบจะไม่สามารถเด้งแจ้งเตือนได้อีก คุณต้องไปตั้งค่าเปิดสิทธิ์ในเบราว์เซอร์ด้วยตนเองตามวิธีด้านล่างครับ</p>
+            </div>
+        `,
+        icon: 'info',
+        showCancelButton: true,
+        confirmButtonText: 'เริ่มตรวจสอบสิทธิ์',
+        cancelButtonText: 'ยกเลิก',
+        confirmButtonColor: '#3b82f6',
+    }).then(async (result) => {
+        if (result.isConfirmed) {
+            showLoading(true);
+            let cameraSuccess = false;
+            let gpsSuccess = false;
+            let errMsg = '';
+
+            // Check Camera
+            try {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error('Hardware Not Supported');
+                }
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                stream.getTracks().forEach(t => t.stop());
+                cameraSuccess = true;
+            } catch (err) {
+                cameraSuccess = false;
+                if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                    errMsg += '<br>- <b>กล้อง:</b> ถูกบล็อก (Permission Denied)';
+                } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                    errMsg += '<br>- <b>กล้อง:</b> ไม่พบอุปกรณ์กล้อง';
+                } else {
+                    errMsg += '<br>- <b>กล้อง:</b> ไม่พร้อมใช้งาน (' + err.name + ')';
+                }
+            }
+
+            // Check GPS
+            if (navigator.geolocation) {
+                try {
+                    await new Promise((resolve) => {
+                        navigator.geolocation.getCurrentPosition(
+                            (pos) => { gpsSuccess = true; resolve(); },
+                            (err) => { 
+                                gpsSuccess = false; 
+                                if (err.code === 1) errMsg += '<br>- <b>GPS:</b> ถูกบล็อก (Permission Denied)';
+                                else if (err.code === 2) errMsg += '<br>- <b>GPS:</b> ไม่สามารถระบุตำแหน่งได้ (Position Unavailable)';
+                                else if (err.code === 3) errMsg += '<br>- <b>GPS:</b> ค้นหาตำแหน่งเกินเวลา (Timeout)';
+                                else errMsg += '<br>- <b>GPS:</b> เกิดข้อผิดพลาด (' + err.message + ')';
+                                resolve(); 
+                            },
+                            { enableHighAccuracy: false, timeout: 8000 }
+                        );
+                    });
+                } catch (e) {
+                    gpsSuccess = false;
+                    errMsg += '<br>- <b>GPS:</b> เกิดข้อผิดพลาดที่ไม่รู้จัก';
+                }
+            } else {
+                errMsg += '<br>- <b>GPS:</b> เบราว์เซอร์ไม่รองรับ';
+            }
+
+            showLoading(false);
+
+            if (cameraSuccess && gpsSuccess) {
+                Swal.fire({
+                    title: 'สำเร็จ',
+                    text: 'ได้รับสิทธิ์ครบถ้วน ระบบกำลังโหลดกล้องและแผนที่ใหม่...',
+                    icon: 'success',
+                    timer: 2000,
+                    showConfirmButton: false
+                }).then(() => {
+                    startCamera();
+                    initMapAndGPS();
+                });
+            } else {
+                Swal.fire({
+                    title: 'ไม่ได้รับสิทธิ์บางอย่าง',
+                    html: `
+                        <div class="text-left text-sm mb-3">
+                            ${errMsg}
+                        </div>
+                        <div class="bg-blue-50 p-3 rounded-lg border border-blue-100 text-left text-xs space-y-2">
+                            <p class="font-bold text-blue-800">วิธีแก้ไข:</p>
+                            <p>1. กดที่ไอคอน <i class="fas fa-lock"></i> (แม่กุญแจ) หรือ <i class="fas fa-info-circle"></i> มุมซ้ายบนของช่องพิมพ์ URL</p>
+                            <p>2. หาเมนู <b>"สิทธิ์" (Permissions)</b> หรือ Site Settings</p>
+                            <p>3. เปลี่ยน <b>"กล้อง" (Camera)</b> และ <b>"ตำแหน่ง" (Location)</b> เป็น <b>อนุญาต (Allow)</b></p>
+                            <p>4. <b>รีเฟรชหน้าเว็บ</b> เพื่อให้ค่าที่ตั้งใหม่ทำงานครับ</p>
+                        </div>
+                    `,
+                    icon: 'warning',
+                    confirmButtonText: 'รับทราบ',
+                    confirmButtonColor: '#3b82f6'
+                });
+            }
+        }
+    });
+}
