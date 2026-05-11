@@ -325,6 +325,8 @@ function setupDatabase() {
     branchesSheet.appendRow(["B001", "ยูดีทีสมายล์"]);
     branchesSheet.appendRow(["B002", "ทีสมายล์อุดรธานี (จินตคาม)"]);
     branchesSheet.appendRow(["B003", "ทีสมายล์นครสวรรค์"]);
+    branchesSheet.appendRow(["B004", "AEC"]);
+    branchesSheet.appendRow(["B005", "LTN"]);
   }
 }
 

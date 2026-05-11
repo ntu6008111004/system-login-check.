@@ -1,4 +1,4 @@
-const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J3UklaMFV5ZEczRzZ3ZTdDWUZCcmlrMDd5VkZtTEVwQU5HVU5JM25HYmlIX2NhemZnSEhUZmVHRXBibGFET2U0M3QvZXhlYw==';
+const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J4SGx1RXA1SFFIdHVKeGdxRENJMEJmUnRkaURZWmswUkdORmltTGhJbFhScjFnZVg4Ri1TUkw2cEZiVjV4dEJhdjgvZXhlYw==';
 const API_URL = atob(_u);
 
 // System State
@@ -1177,6 +1177,11 @@ async function loadBranches() {
         const res = await callAPI('get_branches', {}, true);
         if (res && res.success) {
             allBranches = res.branches || [];
+            
+            // Add AEC and LTN if not already in the list
+            if (!allBranches.find(b => b.name === 'AEC')) allBranches.push({id: 'B004', name: 'AEC'});
+            if (!allBranches.find(b => b.name === 'LTN')) allBranches.push({id: 'B005', name: 'LTN'});
+            
             updateBranchFilters(); // Populate dropdowns immediately when loaded
         }
     } catch (err) {
