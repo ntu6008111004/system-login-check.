@@ -1,4 +1,4 @@
-const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J4SGx1RXA1SFFIdHVKeGdxRENJMEJmUnRkaURZWmswUkdORmltTGhJbFhScjFnZVg4Ri1TUkw2cEZiVjV4dEJhdjgvZXhlYw==';
+const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J4aTc4MmIyajBFWXFUYlhmQnJKQ3VqSFRnNy10RHF5RWFlQk1VbEJLcGpveG5BZ3p1QmNDa1JOSk83eTZ3T0VwWEwvZXhlYw==';
 const API_URL = atob(_u);
 
 // System State
@@ -459,29 +459,28 @@ async function callAPI(action, payload = {}, silent = false) {
   try {
     const response = await fetch(API_URL, {
       method: 'POST',
-      mode: 'no-cors', // Opaque response: browser sends it but can't read the result
+      mode: 'cors',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, data: payload })
     });
     
-    // In no-cors, we assume success if no network error.
-    // Trigger internal UI state update/reload silently.
-    setTimeout(() => {
-        const force = true;
-        if (action === 'create_user' || action === 'update_user' || action === 'delete_user') {
-            loadUsers(force);
-            loadAdminData(force);
-        }
-        if (action === 'save_attendance') {
-            loadHistory(force);
-            loadAdminData(force);
-        }
-    }, 800); // Optimized for better UX (faster than before)
+    if (!response.ok) {
+      throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
+    }
 
-    return { success: true, _opaque: true };
+    const res = await response.json();
+    return res;
   } catch (error) {
     console.error(`API Error (${action}):`, error);
-    if (!silent) Swal.fire('Error', 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้', 'error');
+    if (!silent) {
+      Swal.fire({
+        icon: 'error',
+        title: 'การเชื่อมต่อขัดข้อง',
+        text: 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณาลองใหม่อีกครั้ง (อาจเกิดจากเครือข่ายอินเทอร์เน็ตไม่เสถียร)',
+        confirmButtonText: 'ตกลง',
+        confirmButtonColor: '#3b82f6'
+      });
+    }
     return { success: false, message: error.toString() };
   } finally {
     if (!silent) showLoading(false);
@@ -938,10 +937,24 @@ async function submitAttendance(status) {
     selfie_base64: lastCapturedPhoto 
   });
   if (res.success) {
-    Swal.fire('บันทึกสำเร็จ', status + ' เรียบร้อย', 'success').then(() => {
+    Swal.fire({
+      icon: 'success',
+      title: 'บันทึกสำเร็จ',
+      text: status + ' เรียบร้อยแล้วค่ะ',
+      timer: 1500,
+      showConfirmButton: false
+    }).then(() => {
         retakePhoto();
         checkTodayStatus();
         switchView('history');
+    });
+  } else {
+    Swal.fire({
+      icon: 'error',
+      title: 'บันทึกไม่สำเร็จ',
+      text: res.message || 'ระบบไม่สามารถบันทึกข้อมูลลงฐานข้อมูลได้ กรุณาลองใหม่อีกครั้ง หรือเช็กการเชื่อมต่ออินเทอร์เน็ตค่ะ',
+      confirmButtonText: 'ตกลง',
+      confirmButtonColor: '#3b82f6'
     });
   }
 }
@@ -1710,7 +1723,16 @@ async function openAddUserModal() {
           timer: 1500,
           showConfirmButton: false
         });
-        loadUsers();
+        loadUsers(true);
+        loadAdminData(true);
+      } else {
+        Swal.fire({
+          icon: 'error',
+          title: 'บันทึกไม่สำเร็จ',
+          text: res.message || 'ไม่สามารถเพิ่มพนักงานได้ กรุณาลองใหม่อีกครั้งค่ะ',
+          confirmButtonText: 'ตกลง',
+          confirmButtonColor: '#3b82f6'
+        });
       }
     }
   }
@@ -1729,7 +1751,13 @@ async function confirmDeleteUser(id) {
     });
     if (result.isConfirmed) {
         const res = await callAPI('delete_user', { user_id: id });
-        if (res.success) { Swal.fire('ลบแล้ว', '', 'success'); loadUsers(); }
+        if (res.success) { 
+            Swal.fire('ลบแล้ว', 'ลบข้อมูลพนักงานเรียบร้อยแล้ว', 'success'); 
+            loadUsers(true); 
+            loadAdminData(true);
+        } else {
+            Swal.fire('ลบไม่สำเร็จ', res.message || 'กรุณาลองใหม่อีกครั้งค่ะ', 'error');
+        }
     }
 }
 
@@ -2090,7 +2118,16 @@ async function editUser(id) {
                     timer: 1500,
                     showConfirmButton: false
                 });
-                loadUsers();
+                loadUsers(true);
+                loadAdminData(true);
+            } else {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'บันทึกไม่สำเร็จ',
+                    text: res.message || 'ไม่สามารถแก้ไขข้อมูลได้ กรุณาลองใหม่อีกครั้งค่ะ',
+                    confirmButtonText: 'ตกลง',
+                    confirmButtonColor: '#3b82f6'
+                });
             }
         }
     }
@@ -2171,6 +2208,8 @@ async function triggerMockData() {
             }).then(() => {
                 logout();
             });
+        } else {
+            Swal.fire('สร้างไม่สำเร็จ', res.message || 'กรุณาลองใหม่อีกครั้งค่ะ', 'error');
         }
     }
 }
@@ -2190,7 +2229,10 @@ async function confirmResetAllPasswords() {
         const res = await callAPI('reset_all_passwords');
         if (res.success) {
             Swal.fire('รีเซ็ตสำเร็จ', res.message, 'success');
-            loadUsers();
+            loadUsers(true);
+            loadAdminData(true);
+        } else {
+            Swal.fire('รีเซ็ตไม่สำเร็จ', res.message || 'กรุณาลองใหม่อีกครั้งค่ะ', 'error');
         }
     }
 }

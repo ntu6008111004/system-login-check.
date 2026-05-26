@@ -232,6 +232,7 @@ function generateMockData() {
       .setValues(records);
   }
 
+  clearScriptCache(["db_users", "db_branches"]);
   return { success: true };
 }
 
@@ -243,6 +244,37 @@ function respondJSON(data) {
 
 /** 👤 DATABASE HELPERS */
 const _HEADER_CACHE = {}; 
+
+const CACHE_TTL = 300; // 5 mins in seconds
+
+function getScriptCache(key) {
+  try {
+    const cache = CacheService.getScriptCache();
+    return cache.get(key);
+  } catch (e) {
+    return null;
+  }
+}
+
+function setScriptCache(key, valueString) {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (valueString && valueString.length < 100000) {
+      cache.put(key, valueString, CACHE_TTL);
+    }
+  } catch (e) {
+    // Fail silently
+  }
+}
+
+function clearScriptCache(keys) {
+  try {
+    const cache = CacheService.getScriptCache();
+    cache.removeAll(keys);
+  } catch (e) {
+    // Fail silently
+  }
+} 
 
 function getHeaders(sheet) {
   const name = sheet.getName();
@@ -331,6 +363,14 @@ function setupDatabase() {
 }
 
 function getBranches() {
+  const cacheKey = "db_branches";
+  const cached = getScriptCache(cacheKey);
+  if (cached) {
+    try {
+      return { success: true, branches: JSON.parse(cached), _cached: true };
+    } catch (e) {}
+  }
+
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   let sheet = ss.getSheetByName("BRANCHES");
 
@@ -339,7 +379,7 @@ function getBranches() {
     sheet = ss.getSheetByName("BRANCHES");
   }
 
-  if (!sheet) return JSON.stringify({ success: false, branches: [] });
+  if (!sheet) return { success: false, branches: [] };
 
   const data = sheet.getDataRange().getValues();
   const branches = [];
@@ -347,50 +387,36 @@ function getBranches() {
     branches.push({ id: data[i][0], name: data[i][1] });
   }
 
-  // Return object directly - handleAction handles stringification
+  setScriptCache(cacheKey, JSON.stringify(branches));
   return { success: true, branches: branches };
 }
 
 function loginUser(username, password) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const sheet = ss.getSheetByName("USERS");
-  if (!sheet) return { success: false, message: "ไม่พบฐานข้อมูลผู้ใช้งาน" };
+  const res = getUsers();
+  if (!res.success) return { success: false, message: "ไม่พบฐานข้อมูลผู้ใช้งาน" };
 
-  const headers = getHeaders(sheet);
-  const data = sheet.getDataRange().getDisplayValues();
+  const users = res.users;
   const searchUser = String(username).trim().toLowerCase();
-
-  const col = {};
-  headers.forEach((h, i) => col[h.toLowerCase()] = i);
-
-  if (col.username === undefined || col.password === undefined)
-    return { success: false, message: "Database schema error" };
-
   const inputEncoded = String(password).trim();
 
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    let storedVal = row[col.password].trim();
-    let storedUser = row[col.username].trim().toLowerCase();
+  for (let i = 0; i < users.length; i++) {
+    const u = users[i];
+    const storedUser = String(u.username || "").trim().toLowerCase();
+    const storedVal = String(u.password || "").trim();
     
     if (storedUser === searchUser) {
-        // Handle migration: if stored is plain text, match against input raw?
-        // But frontend now sends Base64. So we compare encoded values.
-        // If stored is SHA256 (64 chars hex), we might need to overwrite it.
-        
         const isMatch = (storedVal === inputEncoded);
-        
         if (isMatch) {
             return {
                 success: true,
                 user: {
-                    id: row[col.id],
-                    name: `${row[col.first_name]} ${row[col.last_name]}`,
+                    id: u.id,
+                    name: `${u.first_name} ${u.last_name}`,
                     username: storedUser,
-                    branch_id: col.branch_id !== undefined ? row[col.branch_id] : "",
-                    company: row[col.company],
-                    role: row[col.role],
-                    profile: row[col.profile] || "",
+                    branch_id: u.branch_id || "",
+                    company: u.company || "",
+                    role: u.role || "",
+                    profile: u.profile || "",
                 },
             };
         }
@@ -416,6 +442,7 @@ function resetAllPasswords() {
   const defaultPassEncoded = hashPassword("1234");
   sheet.getRange(2, colPassword + 1, lastRow - 1, 1).setValue(defaultPassEncoded);
   
+  clearScriptCache(["db_users"]);
   return { success: true, message: "รีเซ็ตรหัสพนักงานทุกคนเป็น 1234 เรียบร้อยแล้ว" };
 }
 
@@ -466,10 +493,19 @@ function saveAttendance(p) {
   });
 
   sheet.appendRow(newRow);
+  clearScriptCache(["db_history_" + p.user_id]);
   return { success: true };
 }
 
 function getUserHistory(userId) {
+  const cacheKey = "db_history_" + userId;
+  const cached = getScriptCache(cacheKey);
+  if (cached) {
+    try {
+      return { success: true, history: JSON.parse(cached), _cached: true };
+    } catch (e) {}
+  }
+
   const sheet =
     SpreadsheetApp.getActiveSpreadsheet().getSheetByName("ATTENDANCE");
   const headers = getHeaders(sheet);
@@ -492,10 +528,20 @@ function getUserHistory(userId) {
       });
     }
   }
+
+  setScriptCache(cacheKey, JSON.stringify(history));
   return { success: true, history };
 }
 
 function getUsers() {
+  const cacheKey = "db_users";
+  const cached = getScriptCache(cacheKey);
+  if (cached) {
+    try {
+      return { success: true, users: JSON.parse(cached), _cached: true };
+    } catch (e) {}
+  }
+
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("USERS");
   const headers = getHeaders(sheet);
   const data = sheet.getDataRange().getDisplayValues();
@@ -507,6 +553,8 @@ function getUsers() {
     });
     return userObj;
   });
+
+  setScriptCache(cacheKey, JSON.stringify(users));
   return { success: true, users };
 }
 
@@ -533,6 +581,7 @@ function createUser(u) {
   });
 
   sheet.appendRow(newRow);
+  clearScriptCache(["db_users"]);
   return { success: true, id: userId };
 }
 
@@ -547,6 +596,7 @@ function deleteUser(userId) {
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idIdx]) === String(userId)) {
       sheet.deleteRow(i + 1);
+      clearScriptCache(["db_users"]);
       return { success: true };
     }
   }
@@ -573,6 +623,7 @@ function updateUser(u) {
           sheet.getRange(i + 1, colIdx + 1).setValue(val);
         }
       });
+      clearScriptCache(["db_users"]);
       return { success: true };
     }
   }
@@ -582,39 +633,31 @@ function updateUser(u) {
 function getAllAttendance() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const attSheet = ss.getSheetByName("ATTENDANCE");
-  const userSheet = ss.getSheetByName("USERS");
-  const branchesSheet = ss.getSheetByName("BRANCHES");
+  
+  const usersRes = getUsers();
+  const branchesRes = getBranches();
+  
+  const userData = usersRes.users || [];
+  const branchList = branchesRes.branches || [];
 
   const attHeaders = getHeaders(attSheet);
-  const userHeaders = getHeaders(userSheet);
-
   const attData = attSheet.getDataRange().getDisplayValues();
-  const userData = userSheet.getDataRange().getDisplayValues();
 
   // 1. Build Branch Map: id -> name
   const branchMap = {};
-  if (branchesSheet) {
-    const branchData = branchesSheet.getDataRange().getValues();
-    for (let i = 1; i < branchData.length; i++) {
-        branchMap[branchData[i][0]] = branchData[i][1];
-    }
-  }
+  branchList.forEach(b => {
+    branchMap[b.id] = b.name;
+  });
 
   // 2. Build User Map for O(1) lookup: id -> {name, branch_id, branch_name}
-  const uCol = {};
-  userHeaders.forEach((h, i) => uCol[h.toLowerCase()] = i);
-  
   const userMap = {};
-  for (let i = 1; i < userData.length; i++) {
-    const row = userData[i];
-    const uid = row[uCol.id];
-    const bid = uCol.branch_id !== undefined ? row[uCol.branch_id] : "";
-    userMap[uid] = {
-      name: `${row[uCol.first_name]} ${row[uCol.last_name]}`,
-      branch_id: bid,
-      branch_name: branchMap[bid] || "",
+  userData.forEach(u => {
+    userMap[u.id] = {
+      name: `${u.first_name} ${u.last_name}`,
+      branch_id: u.branch_id || "",
+      branch_name: branchMap[u.branch_id] || u.company || "",
     };
-  }
+  });
 
   // 3. Process records with O(1) lookup
   const aCol = {};
