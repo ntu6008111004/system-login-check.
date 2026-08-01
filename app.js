@@ -980,8 +980,8 @@ function callAPIJsonp(action, payload = {}, silent = false) {
 
     const payloadStr = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
     const maxAttempts = action === 'login' ? 3 : 2;
-    const attemptTimeout = action === 'get_attendance_photo' ? 30000 : (action === 'login' ? 10000 : 12000);
-    const hedgeDelay = action === 'get_attendance_photo' ? 5000 : (action === 'login' ? 3000 : 6000);
+    const attemptTimeout = action === 'get_attendance_photo' ? 30000 : (action === 'get_admin_data' || action === 'get_users' || action === 'get_history' ? 25000 : (action === 'login' ? 10000 : 15000));
+    const hedgeDelay = action === 'get_attendance_photo' ? 8000 : (action === 'get_admin_data' || action === 'get_users' || action === 'get_history' ? 15000 : (action === 'login' ? 3000 : 8000));
     const loadingText = $('#loading-overlay p').text();
     let settled = false;
     let attempt = 0;
@@ -1027,6 +1027,26 @@ function callAPIJsonp(action, payload = {}, silent = false) {
     };
 
     const failAttempt = (callbackName, message) => {
+      cleanupAttempt(callbackName);
+      if (settled) return;
+      lastError = message;
+      if (attempt < maxAttempts) {
+        clearTimeout(hedgeTimer);
+        if (!silent && action === 'login') {
+          $('#loading-overlay p').text(`การเชื่อมต่อช้า กำลังลองใหม่ (${attempt + 1}/${maxAttempts})...`);
+        }
+        runAttempt();
+        return;
+      }
+      if (activeAttempts.size === 0) finish({ success: false, message: lastError });
+    };
+
+    const runAttempt = () => {
+      if (settled || attempt >= maxAttempts) return;
+      attempt += 1;
+      const callbackName = `js_cb_${Date.now()}_${attempt}_${Math.floor(Math.random() * 100000)}`;
+      const url = `${API_URL}?action=${encodeURIComponent(action)}&payload=${encodeURIComponent(payloadStr)}&callback=${callbackName}&attempt=${attempt}&_=${Date.now()}`;
+      const script = document.createElement('script');
       script.src = url;
       script.async = true;
 
