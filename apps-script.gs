@@ -697,6 +697,10 @@ function saveAttendance(p) {
     getSpreadsheet().getSheetByName("ATTENDANCE");
   const headers = getHeaders(sheet);
   const now = new Date();
+  const requestedStatus = String(p.status || "").trim();
+  if (["เข้างาน", "ออกงาน"].indexOf(requestedStatus) === -1) {
+    return { success: false, message: "สถานะการลงเวลาไม่ถูกต้อง" };
+  }
   const formattedDate = Utilities.formatDate(
     now,
     Session.getScriptTimeZone(),
@@ -749,6 +753,42 @@ function saveAttendance(p) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    const lowercaseHeaders = headers.map(function (header) { return String(header).toLowerCase(); });
+    const userIndex = lowercaseHeaders.indexOf("user_id");
+    const dateIndex = lowercaseHeaders.indexOf("datetime");
+    const statusIndex = lowercaseHeaders.indexOf("status");
+    const todayPrefix = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd/MM/yyyy");
+    let hasCheckedIn = false;
+    let hasCheckedOut = false;
+
+    if (userIndex >= 0 && dateIndex >= 0 && statusIndex >= 0 && sheet.getLastRow() > 1) {
+      const rows = sheet.getDataRange().getDisplayValues();
+      for (let row = 1; row < rows.length; row++) {
+        if (String(rows[row][userIndex]) !== String(p.user_id)) continue;
+        if (!String(rows[row][dateIndex]).trim().startsWith(todayPrefix)) continue;
+        const savedStatus = String(rows[row][statusIndex]).trim();
+        if (savedStatus === "เข้างาน") hasCheckedIn = true;
+        if (savedStatus === "ออกงาน") hasCheckedOut = true;
+      }
+    }
+
+    if (hasCheckedIn && hasCheckedOut) {
+      return { success: false, code: "ATTENDANCE_STATUS_MISMATCH", message: "วันนี้คุณลงเวลาครบแล้ว ไม่สามารถบันทึกรายการเพิ่มได้" };
+    }
+    if (!hasCheckedIn && hasCheckedOut) {
+      return { success: false, code: "ATTENDANCE_STATUS_MISMATCH", message: "พบข้อมูลลงเวลาไม่สมบูรณ์ของวันนี้ กรุณาติดต่อผู้ดูแลระบบ" };
+    }
+
+    const expectedStatus = hasCheckedIn ? "ออกงาน" : "เข้างาน";
+    if (requestedStatus !== expectedStatus) {
+      return {
+        success: false,
+        code: "ATTENDANCE_STATUS_MISMATCH",
+        expected_status: expectedStatus,
+        message: `คุณบันทึก${hasCheckedIn ? "เข้างาน" : "ออกงาน"}แล้ว กรุณาเลือก "${expectedStatus}"`
+      };
+    }
+
     sheet.getRange(sheet.getLastRow() + 1, 1, 1, newRow.length).setValues([newRow]);
   } finally {
     lock.releaseLock();

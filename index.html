@@ -123,10 +123,10 @@
 
             <div id="attendanceActionGroup" class="animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div class="flex gap-4">
-                    <button id="btnIn" class="btn-primary flex-1 !bg-emerald-500 shadow-emerald-200" disabled><i class="fas fa-sign-in-alt mr-2"></i> เข้างาน</button>
-                    <button id="btnOut" class="btn-primary flex-1 !bg-rose-500 shadow-rose-200" disabled><i class="fas fa-sign-out-alt mr-2"></i> ออกงาน</button>
+                    <button id="btnIn" class="btn-primary flex-1 !bg-emerald-500 shadow-emerald-200" disabled><i class="fas fa-circle-notch fa-spin mr-2"></i> กำลังตรวจสอบ</button>
+                    <button id="btnOut" class="btn-primary flex-1 !bg-rose-500 shadow-rose-200" disabled><i class="fas fa-circle-notch fa-spin mr-2"></i> กำลังตรวจสอบ</button>
                 </div>
-                <p id="attendanceHint" class="text-[10px] text-center text-slate-400 mt-3 font-medium">กรุณากดยืนยันรูปภาพเพื่อเปิดใช้งานการลงเวลา</p>
+                <p id="attendanceHint" class="text-[10px] text-center text-slate-400 mt-3 font-medium">กำลังตรวจสอบสถานะเข้างานของวันนี้...</p>
             </div>
         </div>
         <div class="bottom-nav">
@@ -350,6 +350,6 @@
   </div>
 
   <canvas id="photoCanvas" class="hidden"></canvas>
-  <script defer src="app.js?v=20260801-4"></script>
+  <script defer src="app.js?v=20260801-5"></script>
 </body>
 </html>

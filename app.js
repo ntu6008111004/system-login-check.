@@ -1,9 +1,11 @@
-const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J4aTc4MmIyajBFWXFUYlhmQnJKQ3VqSFRnNy10RHF5RWFlQk1VbEJLcGpveG5BZ3p1QmNDa1JOSk83eTZ3T0VwWEwvZXhlYw==';
+const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5cU9WYWZyZnBqcWlqYkR4NDFPTUpXVUZ6TWNjaGpnSGJOUjF5SUp1RENGWjVaUnBNVmczZS1WZ05zcVpBZXFaVGsvZXhlYw==';
 const API_URL = atob(_u);
 
 // System State
 let currentUser = null;
 let videoStream = null;
+let faceDetectionTimer = null;
+let isFaceDetectionRunning = false;
 let lastCapturedPhoto = null;
 let currentCoords = { lat: 0, lng: 0 };
 let currentLocationName = '';
@@ -12,12 +14,12 @@ let marker = null;
 let isLocationReady = false;
 let hasCheckedInToday = false;
 let hasCheckedOutToday = false;
+let isAttendanceStatusResolved = false;
 let allBranches = [];
 
 // AI State
 let faceDetection = null;
 let activeLoadings = 0; // Global counter for async tasks
-let lastDetectionTime = 0; // For iOS throttling
 const DETECTION_INTERVAL = 200; // ms (Target 5-6 FPS for mobile stability)
 /**
  * 🎨 UI COMPONENTS
@@ -35,7 +37,6 @@ function showLoading(show) {
   }
 }
 let isFaceInFrame = false;
-let camera = null;
 let isPhotoConfirmed = false;
 
 // Personal History State
@@ -1089,8 +1090,7 @@ function loadScriptOnce(src, globalName) {
 function loadDashboardLibraries() {
   if (!dashboardLibrariesPromise) {
     dashboardLibrariesPromise = loadScriptOnce('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', 'L')
-      .then(() => loadScriptOnce('https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js', 'FaceDetection'))
-      .then(() => loadScriptOnce('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js', 'Camera'));
+      .then(() => loadScriptOnce('https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js', 'FaceDetection'));
   }
   return dashboardLibrariesPromise;
 }
@@ -1100,12 +1100,14 @@ async function setupDashboard() {
   $('#txtUserCompany').text(currentUser.company);
   const avatarUrl = currentUser.profile || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(currentUser.name)}&backgroundColor=1e3a8a`;
   $('#userAvatar').attr('src', avatarUrl);
+  setAttendanceStatusLoading();
+  const statusPromise = checkTodayStatus(false);
+  initMapAndGPS();
   try {
     await loadDashboardLibraries();
     if (!faceDetection) initFaceDetection();
     startCamera();
-    initMapAndGPS();
-    checkTodayStatus(false);
+    await statusPromise;
   } catch (error) {
     console.error('Dashboard library load error:', error);
     Swal.fire('โหลดอุปกรณ์ไม่สำเร็จ', 'กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่อีกครั้ง', 'error');
@@ -1168,41 +1170,62 @@ async function startCamera() {
   stopCamera(); // Ensure clean start
   const videoElement = document.getElementById('videoFeed');
   try {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Camera API is not supported by this browser');
+    }
+
     const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } });
     videoStream = stream;
     videoElement.srcObject = stream;
-    
-    if (camera) { await camera.stop(); camera = null; }
-    
-    camera = new Camera(videoElement, {
-      onFrame: async () => {
-        if (faceDetection && !lastCapturedPhoto) {
-          const now = Date.now();
-          if (now - lastDetectionTime > DETECTION_INTERVAL) {
-            lastDetectionTime = now;
-            await faceDetection.send({image: videoElement});
-          }
-        }
-      },
-      width: 480, height: 480
-    });
-    camera.start();
+
+    // MediaPipe's Camera helper requests a second stream on the same camera.
+    // Reuse this stream for detection so desktop cameras do not conflict.
+    await videoElement.play();
+    startFaceDetectionLoop(videoElement);
   } catch (e) { 
     console.error('Camera Error:', e);
     let msg = 'ไม่สามารถเข้าถึงกล้องได้';
     if (e.name === 'NotAllowedError') msg = 'กรุณาอนุญาตการเข้าถึงกล้องเพื่อลงเวลา';
     if (e.name === 'NotReadableError') msg = 'กล้องกำลังถูกใช้งานโดยแอปอื่น กรุณาปิดแอปที่ใช้กล้องหรือรีเฟรชเบราว์เซอร์';
+    if (e.name === 'NotFoundError') msg = 'ไม่พบกล้องที่พร้อมใช้งาน กรุณาตรวจสอบการเชื่อมต่อกล้อง';
     Swal.fire('Camera Error', msg, 'error'); 
   }
 }
 
+function startFaceDetectionLoop(videoElement) {
+  stopFaceDetectionLoop();
+  if (!faceDetection) return;
+
+  const detectFace = async () => {
+    if (!videoStream || lastCapturedPhoto || isFaceDetectionRunning || videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+
+    isFaceDetectionRunning = true;
+    try {
+      await faceDetection.send({ image: videoElement });
+    } catch (error) {
+      console.warn('Face detection frame skipped:', error);
+    } finally {
+      isFaceDetectionRunning = false;
+    }
+  };
+
+  detectFace();
+  faceDetectionTimer = window.setInterval(detectFace, DETECTION_INTERVAL);
+}
+
+function stopFaceDetectionLoop() {
+  if (faceDetectionTimer !== null) {
+    window.clearInterval(faceDetectionTimer);
+    faceDetectionTimer = null;
+  }
+  isFaceDetectionRunning = false;
+}
+
 function stopCamera() {
+    stopFaceDetectionLoop();
     if (videoStream) {
         videoStream.getTracks().forEach(track => track.stop());
         videoStream = null;
-    }
-    if (camera) {
-        camera.stop();
     }
     const videoElement = document.getElementById('videoFeed');
     if (videoElement) videoElement.srcObject = null;
@@ -1314,6 +1337,11 @@ function retakePhoto() {
 }
 
 function checkButtonStatus() {
+  if (!isAttendanceStatusResolved) {
+    setAttendanceStatusLoading();
+    return;
+  }
+
   const hasGPS = $('#txtLat').text() !== '...';
   const hint = $('#attendanceHint');
   
@@ -1338,11 +1366,25 @@ function checkButtonStatus() {
   }
 
   // Visual feedback
-  if (hasCheckedInToday) $('#btnIn').html('<i class="fas fa-check-circle mr-2"></i> เข้าแล้ว').addClass('bg-slate-200 shadow-none');
-  else $('#btnIn').html('<i class="fas fa-sign-in-alt mr-2"></i> เข้างาน').removeClass('bg-slate-200 shadow-none');
+  if (hasCheckedInToday) {
+    $('#btnIn').html('<i class="fas fa-check-circle mr-2"></i> เข้าแล้ว')
+      .removeClass('!bg-emerald-500 shadow-emerald-200')
+      .addClass('bg-slate-200 shadow-none');
+  } else {
+    $('#btnIn').html('<i class="fas fa-sign-in-alt mr-2"></i> เข้างาน')
+      .removeClass('bg-slate-200 shadow-none')
+      .addClass('!bg-emerald-500 shadow-emerald-200');
+  }
   
-  if (hasCheckedOutToday) $('#btnOut').html('<i class="fas fa-check-circle mr-2"></i> ออกแล้ว').addClass('bg-slate-200 shadow-none');
-  else $('#btnOut').html('<i class="fas fa-sign-out-alt mr-2"></i> ออกงาน').removeClass('bg-slate-200 shadow-none');
+  if (hasCheckedOutToday) {
+    $('#btnOut').html('<i class="fas fa-check-circle mr-2"></i> ออกแล้ว')
+      .removeClass('!bg-rose-500 shadow-rose-200')
+      .addClass('bg-slate-200 shadow-none');
+  } else {
+    $('#btnOut').html('<i class="fas fa-sign-out-alt mr-2"></i> ออกงาน')
+      .removeClass('bg-slate-200 shadow-none')
+      .addClass('!bg-rose-500 shadow-rose-200');
+  }
 }
 
 async function handleAttendanceClick(status) {
@@ -1368,31 +1410,64 @@ async function handleAttendanceClick(status) {
       });
   }
 
-  submitAttendance(status);
+  return submitAttendance(status);
 }
 
 async function checkTodayStatus(silent = true) {
   if (!currentUser) return;
-  const res = await callAPI('get_history', { user_id: String(currentUser.id) }, silent);
-  if (res.success) {
-    const now = new Date();
-    const todayStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+  setAttendanceStatusLoading();
+  try {
+    const res = await callAPI('get_history', { user_id: String(currentUser.id) }, silent);
+    if (!res.success) throw new Error(res.message || 'ไม่สามารถตรวจสอบสถานะการลงเวลาได้');
+
+    const todayStr = getLocalDateKey();
     
     // Reset flags
     hasCheckedInToday = false;
     hasCheckedOutToday = false;
 
     res.history.forEach(h => {
-       if (!h.date) return;
-       const hDate = h.date.includes('T') ? h.date.split('T')[0] : h.date;
-       if (hDate.startsWith(todayStr)) {
-           if (h.status === 'เข้างาน') hasCheckedInToday = true;
-           if (h.status === 'ออกงาน') hasCheckedOutToday = true;
-       }
+      if (getAttendanceDateKey(h.date) !== todayStr) return;
+      const savedStatus = String(h.status || '').trim();
+      if (savedStatus === 'เข้างาน') hasCheckedInToday = true;
+      if (savedStatus === 'ออกงาน') hasCheckedOutToday = true;
     });
-    
+
+    isAttendanceStatusResolved = true;
     checkButtonStatus();
+    return res;
+  } catch (error) {
+    console.error('Attendance status check failed:', error);
+    $('#attendanceHint').text('⚠️ ตรวจสอบสถานะลงเวลาไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ');
+    return { success: false, message: error.message };
   }
+}
+
+function setAttendanceStatusLoading() {
+  isAttendanceStatusResolved = false;
+  $('#btnIn, #btnOut').prop('disabled', true);
+  $('#btnIn').html('<i class="fas fa-circle-notch fa-spin mr-2"></i> กำลังตรวจสอบ');
+  $('#btnOut').html('<i class="fas fa-circle-notch fa-spin mr-2"></i> กำลังตรวจสอบ');
+  $('#attendanceHint').text('กำลังตรวจสอบสถานะเข้างานของวันนี้...');
+}
+
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getAttendanceDateKey(value) {
+  const dateText = String(value || '').trim();
+  const thaiDate = dateText.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (thaiDate) {
+    const [, day, month, year] = thaiDate;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  const isoDate = dateText.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return isoDate ? isoDate[0] : '';
 }
 
 async function submitAttendance(status) {
@@ -1417,6 +1492,16 @@ async function submitAttendance(status) {
         switchView('history');
     });
   } else {
+    if (res.code === 'ATTENDANCE_STATUS_MISMATCH') {
+      await checkTodayStatus(true);
+      return Swal.fire({
+        icon: 'info',
+        title: 'สถานะการลงเวลาเปลี่ยนแล้ว',
+        text: res.message,
+        confirmButtonText: 'รับทราบ',
+        confirmButtonColor: '#3b82f6'
+      });
+    }
     Swal.fire({
       icon: 'error',
       title: 'บันทึกไม่สำเร็จ',
