@@ -1,4 +1,4 @@
-// Web App deployment v55 (01/08/2026). Keep this in sync when a new deployment URL is created.
+// Web App deployment v56 (01/08/2026). Keep this in sync when a new deployment URL is created.
 const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5cU9WYWZyZnBqcWlqYkR4NDFPTUpXVUZ6TWNjaGpnSGJOUjF5SUp1RENGWjVaUnBNVmczZS1WZ05zcVpBZXFaVGsvZXhlYw==';
 const API_URL = atob(_u);
 
@@ -1551,15 +1551,16 @@ function capturePhoto() {
   }
   
   lastCapturedPhoto = dataUrl;
-  isPhotoConfirmed = false;
+  isPhotoConfirmed = true;
   
-  // Show Review UI
+  // Show Review UI & allow immediate attendance submit
   $('#photoPreview').attr('src', lastCapturedPhoto).removeClass('hidden');
   $('#videoFeed, #cameraGuide').addClass('hidden');
   $('#photoReviewOverlay').removeClass('hidden');
   $('#btnRetake').removeClass('hidden');
-  $('#btnConfirmPhoto').removeClass('hidden');
+  $('#btnConfirmPhoto').addClass('hidden'); // No double confirm needed
   $('#btnCapture').addClass('hidden');
+  checkButtonStatus();
 }
 
 function confirmPhoto() {
@@ -1646,13 +1647,17 @@ function checkButtonStatus() {
 async function handleAttendanceClick(status) {
   const hasGPS = $('#txtLat').text() !== '...';
   
+  if (lastCapturedPhoto && typeof lastCapturedPhoto === 'string' && lastCapturedPhoto.length > 100) {
+      isPhotoConfirmed = true;
+  }
+
   if (!isPhotoConfirmed || !lastCapturedPhoto || typeof lastCapturedPhoto !== 'string' || lastCapturedPhoto.length < 100) {
       isPhotoConfirmed = false;
       lastCapturedPhoto = null;
       return Swal.fire({
           icon: 'warning',
           title: 'กรุณาถ่ายรูปก่อน',
-          text: 'ต้องถ่ายรูปเซลฟี่และกดยืนยันรูปภาพก่อนทำการ' + status,
+          text: 'ต้องถ่ายรูปเซลฟี่ก่อนทำการ' + status,
           confirmButtonText: 'รับทราบ',
           confirmButtonColor: '#3b82f6'
       });
