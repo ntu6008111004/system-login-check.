@@ -1,4 +1,4 @@
-// Web App deployment v53 (01/08/2026). Keep this in sync when a new deployment URL is created.
+// Web App deployment v54 (01/08/2026). Keep this in sync when a new deployment URL is created.
 const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5cU9WYWZyZnBqcWlqYkR4NDFPTUpXVUZ6TWNjaGpnSGJOUjF5SUp1RENGWjVaUnBNVmczZS1WZ05zcVpBZXFaVGsvZXhlYw==';
 const API_URL = atob(_u);
 
@@ -185,20 +185,30 @@ function showImageLightbox(imageUrl, title = '') {
 /**
  * 🖼️ IMAGE COMPRESSION UTILITY (Keep under 47KB)
  */
-async function compressImage(base64, maxDim = 320, quality = 0.7) {
-  if (!base64 || !base64.startsWith('data:image')) return base64;
+async function compressImage(base64, maxDim = 280, quality = 0.5) {
+  if (!base64 || typeof base64 !== 'string' || !base64.startsWith('data:image')) return base64;
   return new Promise((resolve) => {
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      let w = img.width;
-      let h = img.height;
-      if (w > h) { if (w > maxDim) { h *= maxDim / w; w = maxDim; } }
-      else { if (h > maxDim) { w *= maxDim / h; h = maxDim; } }
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL('image/webp', quality));
+      try {
+        const canvas = document.createElement('canvas');
+        let w = img.width || 300;
+        let h = img.height || 300;
+        if (w > h) { if (w > maxDim) { h = Math.round(h * maxDim / w); w = maxDim; } }
+        else { if (h > maxDim) { w = Math.round(w * maxDim / h); h = maxDim; } }
+        canvas.width = Math.max(10, w); 
+        canvas.height = Math.max(10, h);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        let out = canvas.toDataURL('image/jpeg', quality);
+        if (!out || out.length < 100) out = canvas.toDataURL('image/png');
+        resolve(out && out.length > 100 ? out : base64);
+      } catch (e) {
+        resolve(base64);
+      }
     };
     img.onerror = () => resolve(base64);
     img.src = base64;
@@ -934,34 +944,57 @@ async function callAPI(action, payload = {}, silent = false) {
   }
 
   if (!silent) showLoading(true);
-  try {
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, data: payload })
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
-    }
+  let lastPostError = null;
 
-    const res = await response.json();
-    return res;
-  } catch (error) {
-    console.error(`API Error (${action}):`, error);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 25000);
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        mode: 'cors',
+        credentials: 'omit',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action, data: payload }),
+        signal: controller.signal
+      }).finally(() => clearTimeout(timeoutId));
+      
+      if (!response.ok) {
+        throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
+      }
+
+      const res = await response.json();
+      if (!silent) showLoading(false);
+      return res;
+    } catch (error) {
+      lastPostError = error;
+      console.warn(`POST API Attempt ${attempt} failed (${action}):`, error);
+      if (attempt === 1) {
+        await new Promise(r => setTimeout(r, 1200));
+      }
+    }
+  }
+
+  // Fallback to GET JSONP/Fetch if POST fails completely on iOS Safari
+  try {
+    console.warn(`Fallback POST to GET pipeline for (${action})`);
+    const getRes = await callAPIGet(action, payload);
+    if (!silent) showLoading(false);
+    return getRes;
+  } catch (fallbackErr) {
+    console.error(`API Error (${action}):`, lastPostError || fallbackErr);
     if (!silent) {
       Swal.fire({
         icon: 'error',
         title: 'การเชื่อมต่อขัดข้อง',
-        text: 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณาลองใหม่อีกครั้ง (อาจเกิดจากเครือข่ายอินเทอร์เน็ตไม่เสถียร)',
+        text: 'ไม่สามารถส่งข้อมูลได้ กรุณาลองใหม่อีกครั้ง (อาจเกิดจากเครือข่ายอินเทอร์เน็ตไม่เสถียร)',
         confirmButtonText: 'ตกลง',
         confirmButtonColor: '#3b82f6'
       });
     }
-    return { success: false, message: error.toString() };
-  } finally {
     if (!silent) showLoading(false);
+    return { success: false, message: lastPostError?.message || fallbackErr?.message || 'บันทึกไม่สำเร็จ' };
   }
 }
 

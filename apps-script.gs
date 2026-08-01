@@ -587,29 +587,55 @@ function getBranches() {
 }
 
 function loginUser(username, password) {
-  const searchUser = String(username).trim().toLowerCase();
-  const inputEncoded = String(password).trim();
+  const searchUser = String(username || "").trim().toLowerCase();
+  const inputEncoded = String(password || "").trim();
+  if (!searchUser || !inputEncoded) {
+    return { success: false, message: "กรุณากรอกชื่อผู้ใช้งานและรหัสผ่าน" };
+  }
+
   const sheet = getSpreadsheet().getSheetByName("USERS");
-  const rowNumber = getUserRowIndex().byUsername[searchUser];
-  if (!rowNumber) return { success: false, message: "ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง" };
+  if (!sheet || sheet.getLastRow() < 2) {
+    return { success: false, message: "ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง" };
+  }
 
   const headers = getHeaders(sheet);
-  const row = sheet.getRange(rowNumber, 1, 1, headers.length).getDisplayValues()[0];
+  const normalizedHeaders = headers.map(function (h) { return String(h).toLowerCase(); });
+  const usernameColumn = normalizedHeaders.indexOf("username") + 1;
+  let rowNumber = (getUserRowIndex() && getUserRowIndex().byUsername) ? getUserRowIndex().byUsername[searchUser] : null;
+
+  // Direct Fallback Scan if index miss
+  if (!rowNumber && usernameColumn > 0) {
+    const match = sheet
+      .getRange(2, usernameColumn, sheet.getLastRow() - 1, 1)
+      .createTextFinder(searchUser)
+      .matchEntireCell(true)
+      .findNext();
+    if (match) rowNumber = match.getRow();
+  }
+
+  if (!rowNumber) {
+    return { success: false, message: "ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง" };
+  }
+
+  const row = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
   const u = rowToObject(headers, row);
-  if (String(u.password || "").trim() === inputEncoded) {
+  const savedPassword = String(u.password || "").trim();
+  
+  if (savedPassword === inputEncoded) {
     return {
       success: true,
       user: {
-        id: u.id,
-        name: u.first_name + " " + u.last_name,
+        id: String(u.id || ""),
+        name: (String(u.first_name || "") + " " + String(u.last_name || "")).trim(),
         username: searchUser,
-        branch_id: u.branch_id || "",
-        company: u.company || "",
-        role: u.role || "",
+        branch_id: String(u.branch_id || ""),
+        company: String(u.company || ""),
+        role: String(u.role || "user"),
         profile: "",
       },
     };
   }
+
   return {
     success: false,
     message: "ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง",
