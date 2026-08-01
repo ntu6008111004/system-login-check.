@@ -22,7 +22,7 @@ function logToSheet(action, type, data) {
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
 const APP_VERSION = "1.3.4";
-const SCHEMA_VERSION = "5";
+const SCHEMA_VERSION = "6";
 const CACHE_TTL = {
   master: 600,
   history: 120,
@@ -54,7 +54,6 @@ function doOptions(e) {
 
 function doGet(e) {
   try {
-    ensureDatabase();
     const p = e && e.parameter ? e.parameter : {};
     const callback = p.callback;
     const action = p.action;
@@ -73,6 +72,12 @@ function doGet(e) {
     } else {
       body = p;
     }
+
+    // The database already exists in production. Avoid checking Spreadsheet
+    // schema on every login/read request; it can add seconds during Google
+    // cold starts. Only mutations that depend on the current schema perform
+    // the guarded one-time check.
+    if (actionRequiresSchemaCheck(action)) ensureDatabase();
 
     logToSheet(action, "GET", body);
     let result = handleAction(action, body);
@@ -99,13 +104,14 @@ function doGet(e) {
 
 function doPost(e) {
   try {
-    ensureDatabase();
     const contents = e.postData ? e.postData.contents : "";
     if (!contents) throw new Error("No post data content");
 
     const body = JSON.parse(contents);
     const action = body.action;
     const data = body.data || body;
+
+    if (actionRequiresSchemaCheck(action)) ensureDatabase();
 
     logToSheet(action, "POST", data);
     const result = handleAction(action, data);
@@ -537,7 +543,7 @@ function setupDatabase() {
 
 function getUpdateNotice(role) {
   const normalizedRole = String(role || "user").toLowerCase() === "admin" ? "admin" : "user";
-  const cacheKey = "update_notice_" + normalizedRole + "_v" + APP_VERSION;
+  const cacheKey = "update_notice_v2_" + normalizedRole + "_v" + APP_VERSION;
   const cached = getCachedJSON(cacheKey);
   if (cached) return { success: true, update: cached, _cached: true };
 
@@ -900,7 +906,8 @@ function toUserSummary(headers, row) {
 }
 
 function getUsers() {
-  const cacheKey = "db_users_summary_v" + getDataVersion("users");
+  const version = getDataVersion("users");
+  const cacheKey = "db_users_summary_v" + version;
   const cached = getCachedJSON(cacheKey);
   if (cached) return { success: true, users: cached, _cached: true };
 
@@ -919,7 +926,21 @@ function getUsers() {
     return toUserSummary(headers, row);
   });
 
+  // Reuse this already-loaded dataset as the row index for login/edit calls.
+  // This avoids two extra Spreadsheet range reads when an admin opens a user.
+  const idColumn = normalizedHeaders.indexOf("id");
+  const usernameColumn = normalizedHeaders.indexOf("username");
+  const rowIndex = { byId: {}, byUsername: {} };
+  data.forEach(function (row, index) {
+    const rowNumber = index + 2;
+    const id = idColumn >= 0 ? String(row[idColumn] || "") : "";
+    const username = usernameColumn >= 0 ? String(row[usernameColumn] || "").trim().toLowerCase() : "";
+    if (id) rowIndex.byId[id] = rowNumber;
+    if (username) rowIndex.byUsername[username] = rowNumber;
+  });
+
   setCachedJSON(cacheKey, users, CACHE_TTL.master);
+  setCachedJSON("user_row_index_v" + version, rowIndex, CACHE_TTL.index);
   return { success: true, users: users };
 }
 
@@ -927,7 +948,7 @@ function getUserProfile(userId) {
   const id = String(userId || "");
   if (!id) return { success: false, message: "Missing User ID" };
   const version = getDataVersion("users");
-  const cacheKey = "user_private_v2_" + version + "_" + id;
+  const cacheKey = "user_private_v3_" + version + "_" + id;
   const cached = getCachedJSON(cacheKey);
   if (cached && typeof cached === "object") {
     return {
@@ -946,12 +967,28 @@ function getUserProfile(userId) {
   const passwordColumn = headers.indexOf("password") + 1;
   if (!rowNumber) return { success: true, id: id, profile: "", password: "" };
 
+  const requestedColumns = [profileColumn, passwordColumn].filter(function (column) { return column > 0; });
+  const firstColumn = requestedColumns.length ? Math.min.apply(null, requestedColumns) : 1;
+  const lastColumn = requestedColumns.length ? Math.max.apply(null, requestedColumns) : 1;
+  const values = requestedColumns.length
+    ? sheet.getRange(rowNumber, firstColumn, 1, lastColumn - firstColumn + 1).getDisplayValues()[0]
+    : [];
   const details = {
-    profile: profileColumn ? (sheet.getRange(rowNumber, profileColumn).getDisplayValue() || "") : "",
-    password: passwordColumn ? (sheet.getRange(rowNumber, passwordColumn).getDisplayValue() || "") : "",
+    profile: profileColumn ? (values[profileColumn - firstColumn] || "") : "",
+    password: passwordColumn ? (values[passwordColumn - firstColumn] || "") : "",
   };
   setCachedJSON(cacheKey, details, CACHE_TTL.master);
   return { success: true, id: id, profile: details.profile, password: details.password };
+}
+
+function actionRequiresSchemaCheck(action) {
+  return [
+    "save_attendance",
+    "create_user",
+    "update_user",
+    "generate_mock_data",
+    "get_update_notice",
+  ].indexOf(action) !== -1;
 }
 
 function getUserDirectory() {

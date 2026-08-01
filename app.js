@@ -1,4 +1,4 @@
-// Web App deployment v47 (01/08/2026). Keep this in sync when a new deployment URL is created.
+// Web App deployment v51 (01/08/2026). Keep this in sync when a new deployment URL is created.
 const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5cU9WYWZyZnBqcWlqYkR4NDFPTUpXVUZ6TWNjaGpnSGJOUjF5SUp1RENGWjVaUnBNVmczZS1WZ05zcVpBZXFaVGsvZXhlYw==';
 const API_URL = atob(_u);
 
@@ -1219,8 +1219,10 @@ function loadScriptOnce(src, globalName) {
 
 function loadDashboardLibraries() {
   if (!dashboardLibrariesPromise) {
-    dashboardLibrariesPromise = loadScriptOnce('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', 'L')
-      .then(() => loadScriptOnce('https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js', 'FaceDetection'));
+    dashboardLibrariesPromise = Promise.all([
+      loadScriptOnce('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', 'L'),
+      loadScriptOnce('https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js', 'FaceDetection')
+    ]);
   }
   return dashboardLibrariesPromise;
 }
@@ -1557,6 +1559,12 @@ function retakePhoto() {
   $('#btnCapture').removeClass('hidden').html('<i class="fas fa-camera"></i> ถ่ายรูปเซลฟี่').prop('disabled', true).addClass('opacity-50');
   
   $('#attendanceHint').fadeIn(300);
+  const videoElement = document.getElementById('videoFeed');
+  if (faceDetection && videoStream && videoElement) {
+    startFaceDetectionLoop(videoElement);
+  } else if (videoStream) {
+    window.setTimeout(() => enableManualCameraCapture('กล้องพร้อม — ถ่ายรูปได้'), 300);
+  }
   checkButtonStatus();
 }
 
