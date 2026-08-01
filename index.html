@@ -2,37 +2,18 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>ระบบลงเวลาเข้า-ออกงาน (WorkLogs)</title>
   
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script defer src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
-  <!-- Excel Export Library -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-
-  <!-- MediaPipe Face Detection -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
-
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: { corporate: { 50: '#eff6ff', 100: '#dbeafe', 500: '#3b82f6', 700: '#1d4ed8', 900: '#1e3a8a' } },
-          fontFamily: { sans: ['Sarabun', 'sans-serif'] }
-        }
-      }
-    }
-  </script>
-
-  <link rel="stylesheet" href="style.css?v=1.1.0">
+  <link rel="stylesheet" href="tailwind.min.css?v=20260801-3">
+  <link rel="stylesheet" href="style.css?v=20260801-3">
 </head>
 <body class="bg-corporate-50 min-h-screen text-slate-800 antialiased font-sans">
 
@@ -50,8 +31,8 @@
         <div class="p-6 pt-10 pb-12 bg-corporate-900 text-white shadow-xl rounded-b-[3rem] relative z-20 overflow-hidden">
             <div class="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
             <div class="flex items-center gap-5 relative z-10">
-                <img id="userAvatar" src="" class="w-16 h-16 rounded-2xl border-2 border-white/50 bg-white shadow-lg object-cover">
-                <div><h2 id="txtUserName" class="font-bold text-xl leading-tight"></h2><p id="txtUserCompany" class="text-blue-200 text-xs opacity-80 uppercase tracking-wider mt-1"></p></div>
+                <img id="userAvatar" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="รูปโปรไฟล์ผู้ใช้งาน" class="w-16 h-16 rounded-2xl border-2 border-white/50 bg-white shadow-lg object-cover">
+                <div><h2 id="txtUserName" class="font-bold text-xl leading-tight">กำลังโหลดข้อมูล</h2><p id="txtUserCompany" class="text-blue-200 text-xs opacity-80 uppercase tracking-wider mt-1"></p></div>
             </div>
         </div>
         <div class="flex-1 overflow-y-auto p-5 pb-32 -mt-8 relative z-30 space-y-6">
@@ -65,8 +46,8 @@
                     </button>
                 </div>
                 <div class="media-container square-aspect bg-slate-900 group relative">
-                    <video id="videoFeed" autoplay playsinline class="w-full h-full object-cover"></video>
-                    <img id="photoPreview" class="w-full h-full object-cover hidden">
+                    <video id="videoFeed" autoplay muted playsinline aria-label="ภาพจากกล้องสำหรับยืนยันตัวตน" class="w-full h-full object-cover"></video>
+                    <img id="photoPreview" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="ภาพถ่ายยืนยันตัวตน" class="w-full h-full object-cover hidden">
                     
                     <!-- Face Guide SVG Overlay -->
                     <div id="cameraGuide" class="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
@@ -138,7 +119,7 @@
         <div class="bottom-nav">
             <div class="nav-item active"><i class="fas fa-clock"></i><span>ลงเวลา</span></div>
             <div class="nav-item" onclick="switchView('history')"><i class="fas fa-history"></i><span>ประวัติ</span></div>
-            <div class="nav-item hidden" id="navAdmin" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
+            <div class="nav-item hidden" id="navAdminDashboard" onclick="switchView('admin')"><i class="fas fa-shield-alt"></i><span>แอดมิน</span></div>
             <div class="nav-item" onclick="logout()"><i class="fas fa-power-off"></i><span>ออกระบบ</span></div>
         </div>
     </div>
@@ -233,11 +214,11 @@
                     </button>
                 </div>
                 
-                <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
+                <div class="bg-white rounded-xl shadow-sm border overflow-x-auto">
                     <div class="p-3 border-b bg-slate-50">
                         <span class="text-xs font-bold text-slate-600">รายชื่อพนักงานทั้งหมด</span>
                     </div>
-                    <table class="w-full text-left">
+                    <table class="user-table w-full text-left">
                         <thead class="bg-slate-100 text-xs">
                             <tr>
                                 <th class="p-3 font-medium text-slate-600">พนักงาน</th>
@@ -276,7 +257,6 @@
                             <select id="filterUser" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500 transition-all"></select>
                         </div>
                     </div>
-                    <div class="flex flex-wrap gap-2 pt-2">
                     <div class="flex flex-wrap items-end gap-3 pt-2">
                         <div class="flex-1 min-w-[140px]">
                             <button onclick="loadAdminData()" class="w-full bg-corporate-700 hover:bg-corporate-900 text-white py-2.5 px-4 rounded-xl font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2">
@@ -295,7 +275,6 @@
                             </button>
                         </div>
                     </div>
-                    </div>
                 </div>
 
                 <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
@@ -304,7 +283,7 @@
                         <span id="logCount" class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-black">0 รายการ</span>
                     </div>
                     <div class="overflow-x-auto">
-                        <table class="w-full text-left text-xs">
+                        <table class="admin-table w-full text-left text-xs">
                             <thead class="bg-slate-100 uppercase tracking-tighter text-slate-500">
                                 <tr>
                                     <th class="p-3 font-black">พนักงาน</th>
@@ -319,9 +298,9 @@
                         </table>
                     </div>
                     <div class="p-3 bg-slate-50 border-t flex justify-between items-center">
-                        <button id="btnPrevPage" onclick="adminCurrentPage--; renderAdminLogs();" class="text-xs font-bold text-blue-600 disabled:text-slate-300"><i class="fas fa-chevron-left mr-1"></i> ก่อนหน้า</button>
+                        <button id="btnPrevPage" onclick="changeAdminPage(-1)" class="text-xs font-bold text-blue-600 disabled:text-slate-300"><i class="fas fa-chevron-left mr-1"></i> ก่อนหน้า</button>
                         <span class="text-[10px] font-black text-slate-500">หน้า <span id="currentPageNum">1</span> / <span id="totalPageNum">1</span></span>
-                        <button id="btnNextPage" onclick="adminCurrentPage++; renderAdminLogs();" class="text-xs font-bold text-blue-600 disabled:text-slate-300">ถัดไป <i class="fas fa-chevron-right ml-1"></i></button>
+                        <button id="btnNextPage" onclick="changeAdminPage(1)" class="text-xs font-bold text-blue-600 disabled:text-slate-300">ถัดไป <i class="fas fa-chevron-right ml-1"></i></button>
                     </div>
                 </div>
             </div>
@@ -358,12 +337,6 @@
   </div>
 
   <canvas id="photoCanvas" class="hidden"></canvas>
-  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="app.js?v=1.1.0"></script>
+  <script defer src="app.js?v=20260801-3"></script>
 </body>
 </html>

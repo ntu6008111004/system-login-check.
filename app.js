@@ -45,10 +45,15 @@ const historyItemsPerPage = 10;
 // Admin State
 let adminData = [];
 let adminUsers = [];
-let activeAdminTab = 'logs';
+let activeAdminTab = 'users';
 let adminCurrentPage = 1;
 const adminRowsPerPage = 10;
 let adminPollInterval = null;
+let adminTotalRecords = 0;
+let adminTotalPages = 1;
+const inFlightRequests = new Map();
+const memoryCache = new Map();
+let adminFilterTimer = null;
 
 // Utility
 const formatThaiDate = (dateStr) => {
@@ -337,10 +342,13 @@ function initApp() {
 
   // Version Control: Check for updates on Every Refresh
   checkAppVersion();
+  if (currentUser && !isLoginPage) {
+    window.setTimeout(checkUpdateNotice, 450);
+  }
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.1.0"; 
+    const CURRENT_VERSION = "1.3.1";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -383,17 +391,11 @@ function clearInternalCache() {
  * 💾 SAFE STORAGE UTILITY
  * Prevents app crashing when localStorage is full
  */
-function safeCacheItem(key, data) {
+function safeCacheItem(key, data, ttlMs = 120000) {
     if (!key || !data) return;
-    
-    let processedData = data;
-    // Intelligent Truncation: If admin data is too large, cache only most recent 150 records
-    // This ensures fast initial load without hitting 5MB LocalStorage limit
-    if (key.includes('get_admin_data') && data.records && data.records.length > 150) {
-        processedData = { ...data, records: data.records.slice(0, 150) };
-    }
-
-    const stringData = JSON.stringify(processedData);
+    const cacheEntry = { savedAt: Date.now(), expiresAt: Date.now() + ttlMs, data };
+    memoryCache.set(key, cacheEntry);
+    const stringData = JSON.stringify(cacheEntry);
     try {
         localStorage.setItem(key, stringData);
     } catch (e) {
@@ -407,7 +409,6 @@ function safeCacheItem(key, data) {
             
             try {
                 localStorage.setItem(key, stringData);
-                console.log('Successfully cached after purge.');
             } catch (retryError) {
                 // If it still fails, the single item is likely > 5MB
                 console.error('Item too large for LocalStorage even after purge:', (stringData.length / 1024).toFixed(2), 'KB');
@@ -416,6 +417,111 @@ function safeCacheItem(key, data) {
             console.error('LocalStorage Save Error:', e);
         }
     }
+}
+
+function escapeHTML(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+  })[character]);
+}
+
+async function checkUpdateNotice() {
+  if (!currentUser) return;
+  const role = currentUser.role === 'admin' ? 'admin' : 'user';
+  const response = await callAPI('get_update_notice', { role }, true);
+  const update = response && response.success ? response.update : null;
+  if (!update || !update.version) return;
+
+  return showUpdateNotice(update);
+}
+
+async function showUpdateNotice(update) {
+  if (!currentUser || !update || !update.version) return;
+  const role = currentUser.role === 'admin' ? 'admin' : 'user';
+  const seenKey = `worklogs_update_seen_${currentUser.id}_${role}_${update.version}`;
+  if (localStorage.getItem(seenKey) === '1') return;
+
+  const items = Array.isArray(update.items) ? update.items.slice(0, 4) : [];
+  const itemHTML = items.map(item => `
+    <li><i class="fas fa-check-circle" aria-hidden="true"></i><span>${escapeHTML(item)}</span></li>
+  `).join('');
+  const result = await Swal.fire({
+    icon: 'info',
+    title: String(update.title || 'มีการปรับปรุงระบบ'),
+    html: `
+      <div class="update-notice">
+        <p class="update-notice-date"><i class="fas fa-calendar-alt" aria-hidden="true"></i> อัปเดต ${escapeHTML(update.date || '')}</p>
+        <ul class="update-notice-list">${itemHTML}</ul>
+      </div>
+    `,
+    confirmButtonText: 'รับทราบ',
+    confirmButtonColor: '#1d4ed8',
+    allowOutsideClick: false,
+    allowEscapeKey: false,
+    customClass: { popup: 'update-notice-popup' }
+  });
+  if (result.isConfirmed) localStorage.setItem(seenKey, '1');
+}
+
+const CACHE_TTL_MS = {
+  get_branches: 10 * 60 * 1000,
+  get_users: 5 * 60 * 1000,
+  get_history: 2 * 60 * 1000,
+  get_admin_data: 45 * 1000,
+  get_attendance_photo: 10 * 60 * 1000,
+  get_update_notice: 10 * 60 * 1000,
+  get_version: 5 * 60 * 1000
+};
+
+function stablePayload(payload = {}) {
+  return Object.keys(payload).sort().reduce((result, key) => {
+    if (payload[key] !== undefined && payload[key] !== '') result[key] = payload[key];
+    return result;
+  }, {});
+}
+
+function fastHash(text) {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function cacheKeyFor(action, payload = {}) {
+  return `cache_v2_${action}_${fastHash(JSON.stringify(stablePayload(payload)))}`;
+}
+
+function setCache(action, payload, data) {
+  safeCacheItem(cacheKeyFor(action, payload), data, CACHE_TTL_MS[action] || 120000);
+}
+
+function getCache(action, payload = {}, allowStale = true) {
+  const key = cacheKeyFor(action, payload);
+  let entry = memoryCache.get(key);
+  if (!entry) {
+    try {
+      const raw = localStorage.getItem(key);
+      entry = raw ? JSON.parse(raw) : null;
+      if (entry) memoryCache.set(key, entry);
+    } catch (error) {
+      localStorage.removeItem(key);
+      return null;
+    }
+  }
+  if (!entry) return null;
+  if (!allowStale && entry.expiresAt < Date.now()) return null;
+  return entry.data || entry;
+}
+
+function invalidateClientCache(action) {
+  [...memoryCache.keys()].filter(key => key.startsWith(`cache_v2_${action}_`)).forEach(key => memoryCache.delete(key));
+  Object.keys(localStorage).filter(key => key.startsWith(`cache_v2_${action}_`)).forEach(key => localStorage.removeItem(key));
 }
 
 // DELETED callAPIJsonp - Switching to POST-only approach
@@ -429,7 +535,13 @@ function initListeners() {
   // Admin Filter
   $('#filterStartDate, #filterEndDate, #filterUser').on('change', () => {
     adminCurrentPage = 1;
-    renderAdminLogs();
+    clearTimeout(adminFilterTimer);
+    adminFilterTimer = setTimeout(() => loadAdminData(false, true), 180);
+  });
+  $('#filterBranch').on('change', () => {
+    adminCurrentPage = 1;
+    clearTimeout(adminFilterTimer);
+    adminFilterTimer = setTimeout(() => loadAdminData(false, true), 180);
   });
   
   $(document).on('click', '#btnReloadAdmin', resetAdminFilters);
@@ -438,23 +550,270 @@ function initListeners() {
   $(document).on('click', '#btnRetake', retakePhoto);
   $(document).on('click', '#btnConfirmPhoto', confirmPhoto);
 
-  if (window.location.pathname.endsWith('index.html') || window.location.pathname === '/') {
-      initFaceDetection();
-  }
+  initSearchableDropdowns(document.getElementById('view-admin'));
+
+}
+
+/**
+ * Searchable admin dropdowns.
+ * The original <select> remains the source of truth so existing change handlers,
+ * form validation and CRUD code continue to work without any special cases.
+ */
+let activeSearchableDropdown = null;
+let searchableDropdownSequence = 0;
+
+function normalizeSearchText(value) {
+  return String(value || '').normalize('NFKC').toLocaleLowerCase('th').trim();
+}
+
+function initSearchableDropdowns(root = document) {
+  if (!root) return;
+  root.querySelectorAll('select:not(.swal2-select)').forEach(select => enhanceSearchableDropdown(select));
+}
+
+function destroySearchableDropdowns(root) {
+  if (!root) return;
+  root.querySelectorAll('select').forEach(select => select._searchableDropdown?.destroy());
+}
+
+function refreshSearchableDropdown(selectOrSelector) {
+  const select = typeof selectOrSelector === 'string'
+    ? document.querySelector(selectOrSelector)
+    : selectOrSelector;
+  if (!select) return;
+  if (!select._searchableDropdown) enhanceSearchableDropdown(select);
+  select._searchableDropdown?.refresh();
+}
+
+function enhanceSearchableDropdown(select) {
+  if (!select || select._searchableDropdown) return select?._searchableDropdown;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'searchable-select';
+  const input = document.createElement('input');
+  const listbox = document.createElement('div');
+  const icon = document.createElement('i');
+  const listboxId = `searchable-options-${++searchableDropdownSequence}`;
+
+  input.type = 'text';
+  input.className = 'searchable-select-input';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-expanded', 'false');
+  input.setAttribute('aria-controls', listboxId);
+  input.setAttribute('aria-label', select.getAttribute('aria-label') || 'พิมพ์เพื่อค้นหา');
+  listbox.id = listboxId;
+  listbox.className = 'searchable-options-portal';
+  listbox.setAttribute('role', 'listbox');
+  listbox.hidden = true;
+  icon.className = 'fas fa-chevron-down searchable-select-icon';
+
+  wrapper.append(input, icon);
+  select.insertAdjacentElement('afterend', wrapper);
+  select.classList.add('searchable-native-select');
+  select.parentElement?.classList.add('searchable-enhanced');
+  document.body.appendChild(listbox);
+
+  let visibleOptions = [];
+  let activeIndex = -1;
+  let isOpen = false;
+
+  const options = () => Array.from(select.options).map((option, index) => ({
+    index,
+    value: option.value,
+    label: option.textContent.trim(),
+    disabled: option.disabled,
+    search: normalizeSearchText(option.textContent)
+  }));
+
+  const selectedLabel = () => select.selectedOptions[0]?.textContent.trim() || '';
+
+  const positionListbox = () => {
+    if (!isOpen) return;
+    const rect = wrapper.getBoundingClientRect();
+    const gap = 6;
+    const safeMargin = 8;
+    const availableBelow = window.innerHeight - rect.bottom - safeMargin;
+    const availableAbove = rect.top - safeMargin;
+    const preferredHeight = Math.min(288, Math.max(112, visibleOptions.length * 43 + 8));
+    const openAbove = availableBelow < Math.min(180, preferredHeight) && availableAbove > availableBelow;
+    const maxHeight = Math.max(96, Math.min(preferredHeight, openAbove ? availableAbove - gap : availableBelow - gap));
+    listbox.style.left = `${Math.max(safeMargin, Math.min(rect.left, window.innerWidth - rect.width - safeMargin))}px`;
+    listbox.style.width = `${Math.min(rect.width, window.innerWidth - (safeMargin * 2))}px`;
+    listbox.style.maxHeight = `${maxHeight}px`;
+    listbox.style.top = openAbove ? 'auto' : `${rect.bottom + gap}px`;
+    listbox.style.bottom = openAbove ? `${window.innerHeight - rect.top + gap}px` : 'auto';
+  };
+
+  const close = ({ restoreLabel = true } = {}) => {
+    if (!isOpen) return;
+    isOpen = false;
+    listbox.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+    wrapper.classList.remove('is-open');
+    if (restoreLabel) input.value = selectedLabel();
+    if (activeSearchableDropdown === api) activeSearchableDropdown = null;
+  };
+
+  const setActive = index => {
+    if (!visibleOptions.length) return;
+    activeIndex = Math.max(0, Math.min(index, visibleOptions.length - 1));
+    listbox.querySelectorAll('[role="option"]').forEach((node, nodeIndex) => {
+      node.classList.toggle('is-active', nodeIndex === activeIndex);
+    });
+    const activeNode = listbox.querySelector(`[data-visible-index="${activeIndex}"]`);
+    if (activeNode) {
+      input.setAttribute('aria-activedescendant', activeNode.id);
+      activeNode.scrollIntoView({ block: 'nearest' });
+    }
+  };
+
+  const choose = item => {
+    if (!item || item.disabled) return;
+    select.value = item.value;
+    input.value = item.label;
+    close({ restoreLabel: false });
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    input.focus({ preventScroll: true });
+  };
+
+  const render = query => {
+    const needle = normalizeSearchText(query);
+    visibleOptions = options().filter(item => !needle || item.search.includes(needle));
+    listbox.replaceChildren();
+
+    if (!visibleOptions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'searchable-option-empty';
+      empty.textContent = 'ไม่พบข้อมูลที่ค้นหา';
+      listbox.appendChild(empty);
+      activeIndex = -1;
+      input.removeAttribute('aria-activedescendant');
+    } else {
+      visibleOptions.forEach((item, visibleIndex) => {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.id = `${listboxId}-option-${item.index}`;
+        option.className = 'searchable-option';
+        option.textContent = item.label;
+        option.disabled = item.disabled;
+        option.dataset.visibleIndex = visibleIndex;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', String(item.value === select.value));
+        if (item.value === select.value) option.classList.add('is-selected');
+        option.addEventListener('pointerdown', event => event.preventDefault());
+        option.addEventListener('click', () => choose(item));
+        listbox.appendChild(option);
+      });
+      const selectedIndex = visibleOptions.findIndex(item => item.value === select.value);
+      setActive(selectedIndex >= 0 ? selectedIndex : 0);
+    }
+    positionListbox();
+  };
+
+  const open = ({ clearForSearch = false } = {}) => {
+    if (activeSearchableDropdown && activeSearchableDropdown !== api) {
+      activeSearchableDropdown.close();
+    }
+    activeSearchableDropdown = api;
+    isOpen = true;
+    listbox.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    wrapper.classList.add('is-open');
+    if (clearForSearch) input.value = '';
+    render(clearForSearch ? '' : input.value === selectedLabel() ? '' : input.value);
+  };
+
+  const refresh = () => {
+    input.value = selectedLabel();
+    input.placeholder = select.options[0]?.textContent.trim() || 'พิมพ์เพื่อค้นหา';
+    input.disabled = select.disabled;
+    if (isOpen) render('');
+  };
+
+  const handleDocumentPointerDown = event => {
+    if (isOpen && !wrapper.contains(event.target) && !listbox.contains(event.target)) close();
+  };
+  const observer = new MutationObserver(refresh);
+  const destroy = () => {
+    close();
+    observer.disconnect();
+    document.removeEventListener('pointerdown', handleDocumentPointerDown);
+    window.removeEventListener('resize', positionListbox);
+    window.removeEventListener('scroll', positionListbox, true);
+    listbox.remove();
+    wrapper.remove();
+    select.classList.remove('searchable-native-select');
+    if (!select.parentElement?.querySelector('.searchable-select')) {
+      select.parentElement?.classList.remove('searchable-enhanced');
+    }
+    delete select._searchableDropdown;
+  };
+
+  const api = { close, open, refresh, destroy, select, input, listbox };
+  select._searchableDropdown = api;
+
+  input.addEventListener('focus', () => open());
+  input.addEventListener('click', () => {
+    if (!isOpen) open();
+    input.select();
+  });
+  input.addEventListener('input', () => {
+    if (!isOpen) open();
+    render(input.value);
+  });
+  input.addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (!isOpen) open({ clearForSearch: true });
+      else setActive(activeIndex + 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!isOpen) open({ clearForSearch: true });
+      else setActive(activeIndex - 1);
+    } else if (event.key === 'Enter' && isOpen) {
+      event.preventDefault();
+      choose(visibleOptions[activeIndex]);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    } else if (event.key === 'Tab') {
+      close();
+    }
+  });
+  icon.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    input.focus();
+    if (isOpen) close();
+    else open({ clearForSearch: true });
+  });
+  document.addEventListener('pointerdown', handleDocumentPointerDown);
+  window.addEventListener('resize', positionListbox, { passive: true });
+  window.addEventListener('scroll', positionListbox, { passive: true, capture: true });
+  observer.observe(select, { childList: true, subtree: true, attributes: true });
+  refresh();
+  return api;
 }
 
 /**
  * 🚀 API COMMUNICATION
  */
-const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_users', 'get_branches', 'get_version'];
+const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_attendance_photo', 'get_users', 'get_branches', 'get_update_notice', 'get_version'];
 
 async function callAPI(action, payload = {}, silent = false) {
-  // 1. DATA FETCHING (GET/JSONP) - Needed to read results from local file://
   if (DATA_ACTIONS.includes(action)) {
-    return callAPIJsonp(action, payload, silent);
+    const requestKey = `${action}:${JSON.stringify(stablePayload(payload))}`;
+    if (inFlightRequests.has(requestKey)) return inFlightRequests.get(requestKey);
+    const request = callAPIJsonp(action, payload, silent)
+      .finally(() => inFlightRequests.delete(requestKey));
+    inFlightRequests.set(requestKey, request);
+    return request;
   }
 
-  // 2. DATA SUBMISSION (POST) - Needed for large payloads (Images)
   if (!silent) showLoading(true);
   try {
     const response = await fetch(API_URL, {
@@ -498,36 +857,36 @@ function callAPIJsonp(action, payload = {}, silent = false) {
     
     const script = document.createElement('script');
     script.src = url;
-    
-    window[callbackName] = (data) => {
+    script.async = true;
+    let settled = false;
+
+    const finish = (data) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
       delete window[callbackName];
-      document.head.removeChild(script);
+      if (script.parentNode) script.parentNode.removeChild(script);
       if (!silent) showLoading(false);
-      
-      // Smart Unified Caching
-      if (data && data.success) {
-        const cacheKey = `cache_${action}_${payload.user_id || 'global'}`;
-        safeCacheItem(cacheKey, data);
-      }
+      if (data && data.success && !payload.export) setCache(action, payload, data);
       resolve(data);
     };
-    
-    script.onerror = () => {
-      document.head.removeChild(script);
-      if (!silent) showLoading(false);
-      console.error(`JSONP Network Error (${action})`);
-      resolve({ success: false, message: 'Network Error' });
+
+    window[callbackName] = (data) => {
+      finish(data);
     };
+
+    script.onerror = () => {
+      console.error(`JSONP Network Error (${action})`);
+      finish({ success: false, message: 'Network Error' });
+    };
+
+    const timeoutId = setTimeout(() => {
+      console.error(`JSONP Timeout (${action})`);
+      finish({ success: false, message: 'Request timeout' });
+    }, 20000);
     
     document.head.appendChild(script);
   });
-}
-
-// Removing callAPIJsonp as it's no longer needed with POST text/plain approach
-
-function getCache(action, userId = 'global') {
-  const cached = localStorage.getItem(`cache_${action}_${userId}`);
-  return cached ? JSON.parse(cached) : null;
 }
 
 /**
@@ -537,12 +896,12 @@ function startAdminPolling() {
     if (adminPollInterval) return;
 
     adminPollInterval = setInterval(() => {
-        if (currentUser && currentUser.role === 'admin') {
+        if (currentUser && currentUser.role === 'admin' && activeAdminTab === 'logs' && !document.hidden) {
             loadAdminData(true, true); // Force AND Silent refresh
         } else {
             stopAdminPolling();
         }
-    }, 15000);
+    }, 30000);
 }
 
 function stopAdminPolling() {
@@ -584,11 +943,11 @@ function switchView(viewName) {
     const isAdmin = currentUser && currentUser.role === 'admin';
     
     // Reset all
-    $('#navDashboard, #navHistory, #navAdmin').addClass('hidden').removeClass('active');
+    $('#navDashboard, #navHistory, #navAdmin, #navAdminDashboard, #navAdminHist').addClass('hidden').removeClass('active');
     
     if (isAdmin) {
         // Admins see Admin portal and History
-        $('#navAdmin, #navHistory').removeClass('hidden');
+        $('#navAdmin, #navAdminDashboard, #navAdminHist, #navHistory').removeClass('hidden');
         if (viewName === 'admin') $('#navAdmin').addClass('active');
         if (viewName === 'history') $('#navHistory').addClass('active');
     } else {
@@ -607,14 +966,8 @@ function switchView(viewName) {
       stopAdminPolling();
   }
 
-  if (viewName === 'dashboard') {
-      if (typeof Camera !== 'undefined') setupDashboard();
-      else console.warn('Camera UI requested but libraries not loaded');
-  }
+  if (viewName === 'dashboard') setupDashboard();
   if (viewName === 'history') loadHistory();
-  if (viewName === 'admin') {
-      loadUsers(); // Load users data when entering admin view
-  }
 }
 
 
@@ -630,7 +983,7 @@ async function handleLogin(e) {
   const res = await callAPI('login', { username, password });
   if (res.success) {
     currentUser = res.user;
-    if (remember) safeCacheItem('worklogs_user', res.user);
+    if (remember) localStorage.setItem('worklogs_user', JSON.stringify(res.user));
     
     // Clear cache on login to ensure fresh data for new session
     Object.keys(localStorage).forEach(key => { if(key.startsWith('cache_')) localStorage.removeItem(key); });
@@ -664,14 +1017,50 @@ function logout() {
 /**
  * 📍 DASHBOARD LOGIC (Same as before but decoupled)
  */
-function setupDashboard() {
+let dashboardLibrariesPromise = null;
+
+function loadScriptOnce(src, globalName) {
+  if (globalName && window[globalName]) return Promise.resolve();
+  const existing = document.querySelector(`script[data-dynamic-src="${src}"]`);
+  if (existing) return new Promise((resolve, reject) => {
+    existing.addEventListener('load', resolve, { once: true });
+    existing.addEventListener('error', reject, { once: true });
+  });
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.dataset.dynamicSrc = src;
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+
+function loadDashboardLibraries() {
+  if (!dashboardLibrariesPromise) {
+    dashboardLibrariesPromise = loadScriptOnce('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', 'L')
+      .then(() => loadScriptOnce('https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js', 'FaceDetection'))
+      .then(() => loadScriptOnce('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js', 'Camera'));
+  }
+  return dashboardLibrariesPromise;
+}
+
+async function setupDashboard() {
   $('#txtUserName').text(currentUser.name);
   $('#txtUserCompany').text(currentUser.company);
   const avatarUrl = currentUser.profile || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(currentUser.name)}&backgroundColor=1e3a8a`;
   $('#userAvatar').attr('src', avatarUrl);
-  startCamera();
-  initMapAndGPS();
-  checkTodayStatus(false); // First time show loading, then silent
+  try {
+    await loadDashboardLibraries();
+    if (!faceDetection) initFaceDetection();
+    startCamera();
+    initMapAndGPS();
+    checkTodayStatus(false);
+  } catch (error) {
+    console.error('Dashboard library load error:', error);
+    Swal.fire('โหลดอุปกรณ์ไม่สำเร็จ', 'กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่อีกครั้ง', 'error');
+  }
 }
 
 function initMapAndGPS() {
@@ -960,14 +1349,14 @@ async function submitAttendance(status) {
 }
 
 async function loadHistory(force = false) {
-  const cached = force ? null : getCache('get_history', currentUser.id);
+  const payload = { user_id: currentUser.id };
+  const cached = force ? null : getCache('get_history', payload);
   if (cached) {
     personalHistoryData = cached.history;
     renderHistoryFiltered();
   }
-  
-  // Manual load always shows loading spinner to ensure data integrity
-  const res = await callAPI('get_history', { user_id: currentUser.id }, false); 
+
+  const res = await callAPI('get_history', payload, !!cached);
   if (res.success) {
     personalHistoryData = res.history;
     renderHistoryFiltered();
@@ -1098,6 +1487,7 @@ function updateAdminUserFilter() {
     
     $('#filterUser').html(options.join(''));
     if (currentVal) $('#filterUser').val(currentVal); // Restore selection
+    refreshSearchableDropdown('#filterUser');
 }
 
 async function resetAdminFilters() {
@@ -1109,6 +1499,8 @@ async function resetAdminFilters() {
     $('#filterEndDate').val(today);
     $('#filterBranch').val('');
     $('#filterUser').val('');
+    refreshSearchableDropdown('#filterBranch');
+    refreshSearchableDropdown('#filterUser');
     
     // Actually reload data from server
     await loadAdminData(true); 
@@ -1124,83 +1516,108 @@ async function resetAdminFilters() {
 }
 
 async function loadAdminData(force = false, silent = false) {
-  const isSilent = silent; 
-  if (!isSilent) showLoading(true);
-  
-  try {
-    const cached = force ? null : getCache('get_admin_data');
-    if (cached) { 
-        adminData = cached.records; 
-        updateAdminUserFilter(); 
-        renderAdminLogs(); 
-    }
-    
-    // Background polling (silent=true) keeps UI responsive. 
-    // Manual/Tab calls (silent=false) will block to prevent user error.
-    const res = await callAPI('get_admin_data', {}, true); // Always silent inside to avoid flickering
-    
-    if (res.success) {
-      adminData = res.records;
-      
-      // Ensure branches AND users are loaded
-      if (allBranches.length === 0) {
-          await loadBranches();
-      } else {
-          updateBranchFilters();
-      }
+  ensureDefaultAdminDates();
+  const payload = {
+    page: adminCurrentPage,
+    page_size: adminRowsPerPage,
+    start_date: $('#filterStartDate').val() || '',
+    end_date: $('#filterEndDate').val() || '',
+    user_id: $('#filterUser').val() || '',
+    branch_id: $('#filterBranch').val() || ''
+  };
+  const cached = force ? null : getCache('get_admin_data', payload);
+  if (cached) applyAdminPage(cached);
+  if (!cached && !silent) renderAdminSkeleton();
 
-      if (adminUsers.length === 0) {
-          await loadUsers(false, true); // Silent nested call
-      } else {
-          updateAdminUserFilter();
-      }
-
-      renderAdminLogs();
-    }
-  } finally {
-    if (!isSilent) showLoading(false);
-  }
+  const res = await callAPI('get_admin_data', payload, true);
+  if (res.success) applyAdminPage(res);
+  else if (!cached && !silent) showDataError('#adminTableBody', 6);
+  return res;
 }
 
 async function loadUsers(force = false, silent = false) {
-  const isSilent = silent;
-  if (!isSilent) showLoading(true);
-  
+  const fresh = force ? null : getCache('get_users', {}, false);
+  const cached = fresh || (force ? null : getCache('get_users', {}));
+  if (cached) {
+    adminUsers = cached.users || [];
+    updateAdminUserFilter();
+  } else if (!silent) {
+    renderUsersSkeleton();
+  }
+  if (fresh && !force) return fresh;
+
+  const res = await callAPI('get_users', {}, true);
+  if (res.success) {
+    adminUsers = res.users || [];
+    updateAdminUserFilter();
+  } else if (!cached && !silent) {
+    showDataError('#userTableBody', 4);
+  }
+  return res;
+}
+
+async function loadBranches(force = false) {
   try {
-    const cached = force ? null : getCache('get_users');
-    if (cached) { adminUsers = cached.users; renderUsersTable(); updateAdminUserFilter(); }
-    
-    // Always fetch latest from server silently if we already have cache, or if requested silent
-    const res = await callAPI('get_users', {}, true); 
-    
-    if (res.success) {
-      adminUsers = res.users;
-      renderUsersTable();
-      updateAdminUserFilter();
-      // Only cache if successful
-      safeCacheItem('cache_get_users_global', res);
-    }
-  } finally {
-    if (!isSilent) showLoading(false);
+    const fresh = force ? null : getCache('get_branches', {}, false);
+    const cached = fresh || (force ? null : getCache('get_branches', {}));
+    if (cached) applyBranches(cached.branches || []);
+    if (fresh && !force) return fresh;
+
+    const res = await callAPI('get_branches', {}, true);
+    if (res && res.success) applyBranches(res.branches || []);
+    return res;
+  } catch (err) {
+    console.error('Error loading branches:', err);
+    return { success: false, branches: allBranches };
   }
 }
 
-async function loadBranches() {
-    try {
-        const res = await callAPI('get_branches', {}, true);
-        if (res && res.success) {
-            allBranches = res.branches || [];
-            
-            // Add AEC and LTN if not already in the list
-            if (!allBranches.find(b => b.name === 'AEC')) allBranches.push({id: 'B004', name: 'AEC'});
-            if (!allBranches.find(b => b.name === 'LTN')) allBranches.push({id: 'B005', name: 'LTN'});
-            
-            updateBranchFilters(); // Populate dropdowns immediately when loaded
-        }
-    } catch (err) {
-        console.error('Error loading branches:', err);
-        allBranches = [];
-    }
+function applyBranches(branches) {
+  allBranches = [...branches];
+  if (!allBranches.find(b => b.name === 'AEC')) allBranches.push({id: 'B004', name: 'AEC'});
+  if (!allBranches.find(b => b.name === 'LTN')) allBranches.push({id: 'B005', name: 'LTN'});
+  updateBranchFilters();
+}
+
+function ensureDefaultAdminDates() {
+  if ($('#filterStartDate').val()) return;
+  const now = new Date();
+  $('#filterStartDate').val(new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]);
+  $('#filterEndDate').val(now.toISOString().split('T')[0]);
+}
+
+function applyAdminPage(result) {
+  adminData = result.records || [];
+  adminTotalRecords = Number(result.total ?? adminData.length);
+  adminTotalPages = Number(result.total_pages ?? Math.max(1, Math.ceil(adminTotalRecords / adminRowsPerPage)));
+  adminCurrentPage = Number(result.page ?? adminCurrentPage);
+  renderAdminLogs();
+}
+
+function renderAdminSkeleton() {
+  $('#adminTableBody').html(Array.from({ length: 5 }, () => `
+    <tr class="table-skeleton"><td colspan="6" class="p-4"><div class="skeleton-line"></div></td></tr>
+  `).join(''));
+}
+
+function renderUsersSkeleton() {
+  $('#userTableBody').html(Array.from({ length: 5 }, () => `
+    <tr class="table-skeleton"><td colspan="4" class="p-4"><div class="skeleton-line"></div></td></tr>
+  `).join(''));
+}
+
+function showDataError(selector, colspan) {
+  $(selector).html(`<tr><td colspan="${colspan}" class="p-8 text-center text-rose-500 font-bold">โหลดข้อมูลไม่สำเร็จ กรุณากดรีเฟรชอีกครั้ง</td></tr>`);
+}
+
+function showCrudLoading(title) {
+  Swal.fire({
+    title,
+    text: 'ระบบกำลังบันทึกเฉพาะรายการนี้',
+    allowOutsideClick: false,
+    allowEscapeKey: false,
+    didOpen: () => Swal.showLoading()
+  });
 }
 
 function updateBranchFilters() {
@@ -1223,45 +1640,22 @@ function updateBranchFilters() {
     // Restore selections
     if (currentBranch) $('#filterBranch').val(currentBranch);
     if (currentMgmtBranch) $('#userBranchFilter').val(currentMgmtBranch);
+    refreshSearchableDropdown('#filterBranch');
+    refreshSearchableDropdown('#userBranchFilter');
 }
 
 
 function getFilteredAdminRecords() {
-  const start = $('#filterStartDate').val();
-  const end = $('#filterEndDate').val();
-  const userId = $('#filterUser').val();
-  const branchId = $('#filterBranch').val();
-  
-  const startTime = start ? new Date(start + 'T00:00:00').getTime() : 0;
-  const endTime = end ? new Date(end + 'T23:59:59').getTime() : Infinity;
-
-  return adminData.filter(r => {
-    let rDate = null;
-    if (r.date && String(r.date).includes('/')) {
-        const p = r.date.split(' ')[0].split('/');
-        rDate = new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
-    } else if (r.date) {
-        rDate = new Date(r.date);
-    }
-    
-    const rTime = rDate ? rDate.getTime() : 0;
-    const dateMatch = rTime >= startTime && rTime <= endTime;
-    const userMatch = userId ? String(r.user_id) === String(userId) : true;
-    const branchMatch = branchId ? String(r.branch_id) === String(branchId) : true;
-    return dateMatch && userMatch && branchMatch;
-  });
+  return adminData;
 }
 
 function renderAdminLogs() {
-  const filtered = getFilteredAdminRecords();
-  const totalRecords = filtered.length;
-  const totalPages = Math.ceil(totalRecords / adminRowsPerPage) || 1;
-  
+  const pageData = getFilteredAdminRecords();
+  const totalRecords = adminTotalRecords;
+  const totalPages = adminTotalPages;
+
   if (adminCurrentPage > totalPages) adminCurrentPage = totalPages;
   if (adminCurrentPage < 1) adminCurrentPage = 1;
-
-  const start = (adminCurrentPage - 1) * adminRowsPerPage;
-  const pageData = filtered.slice(start, start + adminRowsPerPage);
 
   // Update UI Stats
   $('#logCount').text(`${totalRecords} รายการ`);
@@ -1286,7 +1680,7 @@ function renderAdminLogs() {
         <div class="text-slate-500 font-mono">${formatThaiDate(r.date)}</div>
       </td>
       <td class="p-4 text-center">
-        ${r.selfie ? `<img src="${r.selfie}" class="w-10 h-10 rounded-lg object-cover mx-auto shadow-sm border border-white cursor-pointer" onclick="showImageLightbox('${r.selfie}','Selfie')">` : '<span class="text-slate-300">-</span>'}
+        ${r.id ? `<button type="button" onclick="showAttendancePhoto('${r.id}')" class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors" title="เปิดรูปยืนยันตัวตน" aria-label="เปิดรูปยืนยันตัวตน"><i class="fas fa-image"></i></button>` : '<span class="text-slate-300">-</span>'}
       </td>
       <td class="p-4 text-center">
         <span class="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${r.status==='เข้างาน'?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}">${r.status}</span>
@@ -1302,24 +1696,30 @@ function renderAdminLogs() {
   `).join(''));
 }
 
-function changeAdminPage(offset) {
-    adminCurrentPage += offset;
-    renderAdminLogs();
-    $('#admin-sub-logs').parent().scrollTop(0);
+async function showAttendancePhoto(attendanceId) {
+  const payload = { id: attendanceId };
+  const cached = getCache('get_attendance_photo', payload, false);
+  if (cached && cached.selfie) {
+    showImageLightbox(cached.selfie, 'รูปยืนยันตัวตน');
+    return;
+  }
+  Swal.fire({
+    title: 'กำลังโหลดรูป...',
+    allowOutsideClick: false,
+    didOpen: () => Swal.showLoading()
+  });
+  const response = await callAPI('get_attendance_photo', payload, true);
+  Swal.close();
+  if (response.success && response.selfie) showImageLightbox(response.selfie, 'รูปยืนยันตัวตน');
+  else Swal.fire('ไม่พบรูปภาพ', 'รายการนี้ไม่มีรูปยืนยันตัวตน', 'info');
 }
 
-async function loadUsers(force = false, silent = false) {
-  const cached = force ? null : getCache('get_users');
-  if (cached) { adminUsers = cached.users; renderUsersTable(); updateAdminUserFilter(); }
-  
-  const isSilent = silent;
-  const res = await callAPI('get_users', {}, isSilent);
-  
-  if (res.success) {
-    adminUsers = res.users;
-    renderUsersTable();
-    updateAdminUserFilter();
-  }
+function changeAdminPage(offset) {
+    const nextPage = Math.min(adminTotalPages, Math.max(1, adminCurrentPage + offset));
+    if (nextPage === adminCurrentPage) return;
+    adminCurrentPage = nextPage;
+    loadAdminData(false, true);
+    $('#admin-sub-logs').parent().scrollTop(0);
 }
 
 async function runAdminSelfTest() {
@@ -1596,6 +1996,7 @@ async function openAddUserModal() {
     focusConfirm: false,
     allowOutsideClick: false,
     didOpen: () => {
+      initSearchableDropdowns(Swal.getPopup());
       // Setup file input handlers after modal opens
       const fileInput = document.getElementById('swal-file');
       const preview = document.getElementById('swal-preview');
@@ -1652,6 +2053,7 @@ async function openAddUserModal() {
         fileBadge.classList.add('hidden');
       });
     },
+    willClose: () => destroySearchableDropdowns(Swal.getPopup()),
     preConfirm: async () => {
       const username = document.getElementById('swal-user').value.trim();
       const first_name = document.getElementById('swal-fn').value.trim();
@@ -1714,8 +2116,13 @@ async function openAddUserModal() {
     });
 
     if (confirmResult.isConfirmed) {
-      const res = await callAPI('create_user', result.value);
+      showCrudLoading('กำลังเพิ่มพนักงาน...');
+      const res = await callAPI('create_user', result.value, true);
       if (res.success) {
+        const createdUser = res.user || { ...result.value, id: res.id };
+        adminUsers = [...adminUsers, createdUser];
+        invalidateClientCache('get_users');
+        updateAdminUserFilter();
         Swal.fire({
           icon: 'success',
           title: 'บันทึกสำเร็จ',
@@ -1723,8 +2130,6 @@ async function openAddUserModal() {
           timer: 1500,
           showConfirmButton: false
         });
-        loadUsers(true);
-        loadAdminData(true);
       } else {
         Swal.fire({
           icon: 'error',
@@ -1750,11 +2155,13 @@ async function confirmDeleteUser(id) {
         cancelButtonText: 'ยกเลิก'
     });
     if (result.isConfirmed) {
-        const res = await callAPI('delete_user', { user_id: id });
+        showCrudLoading('กำลังลบพนักงาน...');
+        const res = await callAPI('delete_user', { user_id: id }, true);
         if (res.success) { 
+            adminUsers = adminUsers.filter(user => String(user.id) !== String(id));
+            invalidateClientCache('get_users');
+            updateAdminUserFilter();
             Swal.fire('ลบแล้ว', 'ลบข้อมูลพนักงานเรียบร้อยแล้ว', 'success'); 
-            loadUsers(true); 
-            loadAdminData(true);
         } else {
             Swal.fire('ลบไม่สำเร็จ', res.message || 'กรุณาลองใหม่อีกครั้งค่ะ', 'error');
         }
@@ -1933,6 +2340,7 @@ async function editUser(id) {
         focusConfirm: false,
         allowOutsideClick: false,
         didOpen: () => {
+            initSearchableDropdowns(Swal.getPopup());
             const fileInput = document.getElementById('swal-file');
             const preview = document.getElementById('swal-preview');
             const previewImg = document.getElementById('swal-preview-img');
@@ -2036,6 +2444,7 @@ async function editUser(id) {
                 });
             }
         },
+        willClose: () => destroySearchableDropdowns(Swal.getPopup()),
         preConfirm: async () => {
             const username = document.getElementById('swal-user').value.trim();
             const first_name = document.getElementById('swal-fn').value.trim();
@@ -2109,8 +2518,14 @@ async function editUser(id) {
         });
 
         if (confirmResult.isConfirmed) {
-            const res = await callAPI('update_user', result.value);
+            showCrudLoading('กำลังบันทึกการแก้ไข...');
+            const res = await callAPI('update_user', result.value, true);
             if (res.success) {
+                const updatedUser = res.user || result.value;
+                adminUsers = adminUsers.map(user => String(user.id) === String(id) ? { ...user, ...updatedUser } : user);
+                invalidateClientCache('get_users');
+                invalidateClientCache('get_admin_data');
+                updateAdminUserFilter();
                 Swal.fire({
                     icon: 'success',
                     title: 'บันทึกสำเร็จ',
@@ -2118,8 +2533,6 @@ async function editUser(id) {
                     timer: 1500,
                     showConfirmButton: false
                 });
-                loadUsers(true);
-                loadAdminData(true);
             } else {
                 Swal.fire({
                     icon: 'error',
@@ -2143,8 +2556,41 @@ async function prepareReports() {
   $('#reportUser').html('<option value="">-- พนักงานทั้งหมด --</option>' + adminUsers.map(u => `<option value="${u.id}">${u.first_name} ${u.last_name}</option>`).join(''));
 }
 
-function exportToExcel() {
-    const records = getFilteredAdminRecords();
+async function fetchAllAdminRecordsForExport() {
+  const basePayload = {
+    page_size: 500,
+    start_date: $('#filterStartDate').val() || '',
+    end_date: $('#filterEndDate').val() || '',
+    user_id: $('#filterUser').val() || '',
+    branch_id: $('#filterBranch').val() || '',
+    export: true
+  };
+  const records = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const response = await callAPI('get_admin_data', { ...basePayload, page }, true);
+    if (!response.success) throw new Error(response.message || 'Export query failed');
+    records.push(...(response.records || []));
+    totalPages = response.total_pages || 1;
+    page++;
+  } while (page <= totalPages);
+  return records;
+}
+
+async function exportToExcel() {
+    showLoading(true);
+    let records;
+    try {
+      [records] = await Promise.all([
+        fetchAllAdminRecordsForExport(),
+        loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', 'XLSX')
+      ]);
+    } catch (error) {
+      showLoading(false);
+      return Swal.fire('ส่งออกไม่สำเร็จ', 'ไม่สามารถเตรียมรายงานได้ กรุณาลองใหม่', 'error');
+    }
+    showLoading(false);
     if (records.length === 0) return Swal.fire('ไม่มีข้อมูล', 'ไม่พบข้อมูลในช่วงที่เลือก', 'warning');
     
     const data = records.map(r => ({ 
@@ -2162,8 +2608,16 @@ function exportToExcel() {
     XLSX.writeFile(wb, `Report_${start}_to_${end}.xlsx`);
 }
 
-function exportToCSV() {
-    const records = getFilteredAdminRecords();
+async function exportToCSV() {
+    showLoading(true);
+    let records;
+    try {
+      records = await fetchAllAdminRecordsForExport();
+    } catch (error) {
+      showLoading(false);
+      return Swal.fire('ส่งออกไม่สำเร็จ', 'ไม่สามารถเตรียมรายงานได้ กรุณาลองใหม่', 'error');
+    }
+    showLoading(false);
     if (records.length === 0) return Swal.fire('ไม่มีข้อมูล', 'ไม่พบข้อมูลในช่วงที่เลือก', 'warning');
     
     const data = records.map(r => ({ 

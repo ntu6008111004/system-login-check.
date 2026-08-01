@@ -30,3 +30,24 @@
 ---
 จัดทำโดย Antigravity 👸✨
 🏆 Production-Ready Attendance System
+
+## Performance Edition 1.3.1
+
+เวอร์ชันนี้ปรับเส้นทางที่ใช้งานบ่อยให้เร็วขึ้นทั้งหน้าเว็บและ Google Apps Script:
+
+- หน้าแอดมินใช้ server-side filter/pagination และรับข้อมูลครั้งละ 10 รายการ แทนการโหลด Attendance ทั้งชีตพร้อมรูปทั้งหมด
+- รูปยืนยันตัวตนโหลดเฉพาะเมื่อผู้ใช้กดเปิดรูป จึงไม่ส่ง Base64 มากับทุกแถวของรายงาน
+- มี application index สำหรับค้นหาแถวผู้ใช้จาก `id` และ `username` โดยตรง
+- ใช้ CacheService + versioned cache invalidation สำหรับผู้ใช้ สาขา ประวัติ และ query รายงาน
+- หน้าเว็บใช้ memory/local cache แบบ stale-while-revalidate และรวม request ที่ซ้ำกัน
+- โหลด MediaPipe, Leaflet และ XLSX เฉพาะหน้าหรือเวลาที่ต้องใช้
+- Tailwind ถูก compile เป็น `tailwind.min.css` แล้ว จึงไม่ต้องประมวลผล Tailwind CDN ใน browser
+- CRUD อัปเดตเฉพาะรายการบนหน้าจอ ไม่ดึงตารางผู้ใช้และ Attendance ใหม่ทั้งชุด
+
+หลังแก้ `apps-script.gs` ต้อง Deploy เป็น Web App เวอร์ชันใหม่ก่อน แล้วจึงเผยแพร่ไฟล์ frontend ทั้งหมดบน GitHub Pages โดยเฉพาะ `tailwind.min.css`.
+
+หากแก้ class ของ Tailwind ในอนาคต ให้ build CSS ใหม่ด้วยคำสั่ง:
+
+```powershell
+npx.cmd --yes tailwindcss@3.4.17 -c tailwind.config.js -i tailwind.input.css -o tailwind.min.css --minify
+```
