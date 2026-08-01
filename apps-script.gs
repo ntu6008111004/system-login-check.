@@ -788,7 +788,7 @@ function saveAttendance(p) {
         newRow.push(locationName);
         break;
       case "selfie":
-        newRow.push(p.selfie_base64 || p.selfie || "");
+        newRow.push(p.selfie_base64 || p.selfie || p.photo || "");
         break;
       case "device":
         newRow.push("Web");

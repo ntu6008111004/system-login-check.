@@ -410,26 +410,17 @@ function safeCacheItem(key, data, ttlMs = 120000) {
     if (!key || !data) return;
     const cacheEntry = { savedAt: Date.now(), expiresAt: Date.now() + ttlMs, data };
     memoryCache.set(key, cacheEntry);
-    const stringData = JSON.stringify(cacheEntry);
     try {
+        const stringData = JSON.stringify(cacheEntry);
         localStorage.setItem(key, stringData);
     } catch (e) {
-        // Handle QuotaExceededError across different browsers
-        if (e.name === 'QuotaExceededError' || 
-            e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || 
-            e.code === 22) {
-            
-            console.warn('LocalStorage quota exceeded. Purging caches...');
-            clearInternalCache();
-            
-            try {
-                localStorage.setItem(key, stringData);
-            } catch (retryError) {
-                // If it still fails, the single item is likely > 5MB
-                console.error('Item too large for LocalStorage even after purge:', (stringData.length / 1024).toFixed(2), 'KB');
-            }
-        } else {
-            console.error('LocalStorage Save Error:', e);
+        console.warn('LocalStorage quota exceeded. Purging caches...');
+        clearInternalCache();
+        try {
+            const stringData = JSON.stringify(cacheEntry);
+            localStorage.setItem(key, stringData);
+        } catch (retryError) {
+            console.warn('LocalStorage full, item saved in RAM memoryCache:', key);
         }
     }
 }
@@ -1622,7 +1613,9 @@ function checkButtonStatus() {
 async function handleAttendanceClick(status) {
   const hasGPS = $('#txtLat').text() !== '...';
   
-  if (!isPhotoConfirmed) {
+  if (!isPhotoConfirmed || !lastCapturedPhoto || typeof lastCapturedPhoto !== 'string' || lastCapturedPhoto.length < 100) {
+      isPhotoConfirmed = false;
+      lastCapturedPhoto = null;
       return Swal.fire({
           icon: 'warning',
           title: 'กรุณาถ่ายรูปก่อน',
@@ -1703,13 +1696,25 @@ function getAttendanceDateKey(value) {
 }
 
 async function submitAttendance(status) {
+  const photoToSend = lastCapturedPhoto;
+  if (!photoToSend || photoToSend.length < 100) {
+    Swal.fire({
+      icon: 'error',
+      title: 'รูปถ่ายไม่สมบูรณ์',
+      text: 'ไม่พบรูปถ่ายเซลฟี่ กรุณากดถ่ายรูปใหม่อีกครั้งค่ะ',
+      confirmButtonText: 'ตกลง'
+    });
+    return retakePhoto();
+  }
+
   const res = await callAPI('save_attendance', { 
     user_id: currentUser.id, 
     status, 
     latitude: currentCoords.lat, 
     longitude: currentCoords.lng, 
     location_name: currentLocationName,
-    selfie_base64: lastCapturedPhoto 
+    selfie_base64: photoToSend,
+    selfie: photoToSend
   });
   if (res.success) {
     Swal.fire({
@@ -2228,12 +2233,15 @@ function renderAdminLogs() {
 
 async function showAttendancePhoto(attendanceId) {
   const payload = { id: attendanceId };
-  const cached = getCache('get_attendance_photo', payload, false);
-  if (cached) {
-    if (cached.selfie) showImageLightbox(cached.selfie, 'รูปยืนยันตัวตน');
-    else Swal.fire('ไม่พบรูปภาพ', 'รายการนี้ไม่มีรูปยืนยันตัวตน', 'info');
+
+  // Try fresh cache first
+  const freshCached = getCache('get_attendance_photo', payload, false);
+  if (freshCached) {
+    if (freshCached.selfie) showImageLightbox(freshCached.selfie, 'รูปยืนยันตัวตน');
+    else Swal.fire('ไม่มีรูปยืนยันตัวตน', 'รายการนี้ไม่ได้บันทึกรูปยืนยันตัวตนไว้', 'info');
     return;
   }
+
   Swal.fire({
     title: 'กำลังโหลดรูป...',
     html: '<p class="text-xs text-slate-400">รูปจะถูกโหลดเมื่อเลือกดูเท่านั้น</p>',
@@ -2241,10 +2249,35 @@ async function showAttendancePhoto(attendanceId) {
     allowEscapeKey: false,
     didOpen: () => Swal.showLoading()
   });
+
   const response = await callAPI('get_attendance_photo', payload, true);
   Swal.close();
-  if (response.success && response.selfie) showImageLightbox(response.selfie, 'รูปยืนยันตัวตน');
-  else Swal.fire('ไม่พบรูปภาพ', 'รายการนี้ไม่มีรูปยืนยันตัวตน', 'info');
+
+  if (response && response.success) {
+    if (response.selfie) {
+      showImageLightbox(response.selfie, 'รูปยืนยันตัวตน');
+    } else {
+      Swal.fire('ไม่มีรูปยืนยันตัวตน', 'รายการนี้ไม่ได้บันทึกรูปยืนยันตัวตนไว้', 'info');
+    }
+  } else {
+    const staleCached = getCache('get_attendance_photo', payload, true);
+    if (staleCached && staleCached.selfie) {
+      showImageLightbox(staleCached.selfie, 'รูปยืนยันตัวตน');
+      return;
+    }
+    const retryResult = await Swal.fire({
+      icon: 'warning',
+      title: 'โหลดรูปไม่สำเร็จ',
+      text: 'ไม่สามารถดึงรูปได้ในขณะนี้ อาจเกิดจากเครือข่ายไม่เสถียร',
+      confirmButtonText: 'ลองใหม่',
+      confirmButtonColor: '#3b82f6',
+      showCancelButton: true,
+      cancelButtonText: 'ยกเลิก'
+    });
+    if (retryResult.isConfirmed) {
+      showAttendancePhoto(attendanceId);
+    }
+  }
 }
 
 function changeAdminPage(offset) {
@@ -2747,12 +2780,12 @@ async function editUser(id) {
 
     const profilePayload = { id };
     const profileCached = getCache('get_user_profile', profilePayload, false);
-    if (profileCached) {
+    if (profileCached && profileCached.password) {
         u = { ...u, profile: profileCached.profile || '', password: profileCached.password || '' };
     } else {
         if (!needsLoading) showCrudLoading('กำลังเตรียมข้อมูลพนักงาน...');
         const profileResponse = await callAPI('get_user_profile', profilePayload, true);
-        if (profileResponse.success) {
+        if (profileResponse && profileResponse.success) {
             u = { ...u, profile: profileResponse.profile || '', password: profileResponse.password || '' };
         }
     }
