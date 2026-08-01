@@ -6,6 +6,7 @@ let currentUser = null;
 let videoStream = null;
 let lastCapturedPhoto = null;
 let currentCoords = { lat: 0, lng: 0 };
+let currentLocationName = '';
 let map = null;
 let marker = null;
 let isLocationReady = false;
@@ -348,7 +349,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.1";
+    const CURRENT_VERSION = "1.3.2";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -473,6 +474,7 @@ const CACHE_TTL_MS = {
   get_history: 2 * 60 * 1000,
   get_admin_data: 45 * 1000,
   get_attendance_photo: 10 * 60 * 1000,
+  reverse_geocode: 6 * 60 * 60 * 1000,
   get_update_notice: 10 * 60 * 1000,
   get_version: 5 * 60 * 1000
 };
@@ -802,7 +804,7 @@ function enhanceSearchableDropdown(select) {
 /**
  * 🚀 API COMMUNICATION
  */
-const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_attendance_photo', 'get_users', 'get_branches', 'get_update_notice', 'get_version'];
+const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_attendance_photo', 'get_users', 'get_branches', 'get_update_notice', 'get_version', 'reverse_geocode'];
 
 async function callAPI(action, payload = {}, silent = false) {
   if (DATA_ACTIONS.includes(action)) {
@@ -849,43 +851,90 @@ async function callAPI(action, payload = {}, silent = false) {
 function callAPIJsonp(action, payload = {}, silent = false) {
   return new Promise((resolve) => {
     if (!silent) showLoading(true);
-    
-    // Convert payload to Base64 to handle complex data inside GET params safely
+
     const payloadStr = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
-    const callbackName = 'js_cb_' + Math.floor(Math.random() * 1000000);
-    const url = `${API_URL}?action=${action}&payload=${payloadStr}&callback=${callbackName}`;
-    
-    const script = document.createElement('script');
-    script.src = url;
-    script.async = true;
+    const maxAttempts = action === 'login' ? 3 : 2;
+    const attemptTimeout = action === 'login' ? 10000 : 12000;
+    const hedgeDelay = action === 'login' ? 3000 : 6000;
+    const loadingText = $('#loading-overlay p').text();
     let settled = false;
+    let attempt = 0;
+    let hedgeTimer = null;
+    let lastError = 'ระบบตอบกลับช้าเกินไป กรุณาลองอีกครั้ง';
+    const activeAttempts = new Map();
+
+    const cleanupAttempt = callbackName => {
+      const request = activeAttempts.get(callbackName);
+      if (!request) return;
+      clearTimeout(request.timeoutId);
+      delete window[callbackName];
+      if (request.script.parentNode) request.script.parentNode.removeChild(request.script);
+      activeAttempts.delete(callbackName);
+    };
 
     const finish = (data) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeoutId);
-      delete window[callbackName];
-      if (script.parentNode) script.parentNode.removeChild(script);
+      clearTimeout(hedgeTimer);
+      Array.from(activeAttempts.keys()).forEach(cleanupAttempt);
+      $('#loading-overlay p').text(loadingText);
       if (!silent) showLoading(false);
       if (data && data.success && !payload.export) setCache(action, payload, data);
       resolve(data);
     };
 
-    window[callbackName] = (data) => {
-      finish(data);
+    const scheduleHedge = () => {
+      clearTimeout(hedgeTimer);
+      if (settled || attempt >= maxAttempts) return;
+      hedgeTimer = window.setTimeout(() => {
+        if (settled) return;
+        if (!silent && action === 'login') {
+          $('#loading-overlay p').text(`การเชื่อมต่อช้า กำลังลองใหม่ (${attempt + 1}/${maxAttempts})...`);
+        }
+        runAttempt();
+      }, hedgeDelay);
     };
 
-    script.onerror = () => {
-      console.error(`JSONP Network Error (${action})`);
-      finish({ success: false, message: 'Network Error' });
+    const failAttempt = (callbackName, message) => {
+      cleanupAttempt(callbackName);
+      if (settled) return;
+      lastError = message;
+      if (attempt < maxAttempts) {
+        clearTimeout(hedgeTimer);
+        if (!silent && action === 'login') {
+          $('#loading-overlay p').text(`การเชื่อมต่อช้า กำลังลองใหม่ (${attempt + 1}/${maxAttempts})...`);
+        }
+        runAttempt();
+        return;
+      }
+      if (activeAttempts.size === 0) finish({ success: false, message: lastError });
     };
 
-    const timeoutId = setTimeout(() => {
-      console.error(`JSONP Timeout (${action})`);
-      finish({ success: false, message: 'Request timeout' });
-    }, 20000);
-    
-    document.head.appendChild(script);
+    const runAttempt = () => {
+      if (settled || attempt >= maxAttempts) return;
+      attempt += 1;
+      const callbackName = `js_cb_${Date.now()}_${attempt}_${Math.floor(Math.random() * 100000)}`;
+      const url = `${API_URL}?action=${encodeURIComponent(action)}&payload=${encodeURIComponent(payloadStr)}&callback=${callbackName}&attempt=${attempt}&_=${Date.now()}`;
+      const script = document.createElement('script');
+      script.src = url;
+      script.async = true;
+
+      window[callbackName] = data => finish(data);
+      script.onerror = () => {
+        console.warn(`JSONP Network Error (${action}) attempt ${attempt}/${maxAttempts}`);
+        failAttempt(callbackName, 'เชื่อมต่อระบบไม่สำเร็จ กรุณาลองอีกครั้ง');
+      };
+      const timeoutId = window.setTimeout(() => {
+        console.warn(`JSONP Timeout (${action}) attempt ${attempt}/${maxAttempts}`);
+        failAttempt(callbackName, 'ระบบตอบกลับช้าเกินไป กรุณาลองอีกครั้ง');
+      }, attemptTimeout);
+
+      activeAttempts.set(callbackName, { script, timeoutId });
+      document.head.appendChild(script);
+      scheduleHedge();
+    };
+
+    runAttempt();
   });
 }
 
@@ -997,7 +1046,7 @@ async function handleLogin(e) {
     Swal.fire({ 
         icon: 'success', 
         title: 'สวัสดีคุณ ' + res.user.name, 
-        timer: 1500, 
+        timer: 650,
         showConfirmButton: false,
         background: 'rgba(255, 255, 255, 0.95)',
         backdrop: 'rgba(30, 58, 138, 0.2) blur(10px)'
@@ -1065,7 +1114,9 @@ async function setupDashboard() {
 
 function initMapAndGPS() {
   isLocationReady = false;
+  currentLocationName = '';
   $('#gpsStatusBadge').removeClass('bg-green-100 text-green-800').addClass('bg-yellow-100 text-yellow-800 animate-pulse').text('กำลังค้นหา...');
+  setLocationNameStatus('กำลังรอพิกัด GPS...', 'loading');
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(pos => {
       currentCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
@@ -1074,8 +1125,35 @@ function initMapAndGPS() {
       isLocationReady = true;
       $('#gpsStatusBadge').removeClass('bg-yellow-100 animate-pulse').addClass('bg-green-100').text('พบพิกัดแล้ว');
       renderMap(currentCoords.lat, currentCoords.lng);
+      resolveCurrentLocationName(currentCoords.lat, currentCoords.lng);
       checkButtonStatus();
-    }, err => { Swal.fire('Error', 'กรุณาเปิด GPS', 'error'); }, { enableHighAccuracy: true });
+    }, err => {
+      setLocationNameStatus('ไม่สามารถอ่านตำแหน่งได้', 'error');
+      Swal.fire('Error', 'กรุณาเปิด GPS', 'error');
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
+  }
+}
+
+function setLocationNameStatus(message, state = 'loading') {
+  const iconClasses = {
+    loading: 'fas fa-circle-notch fa-spin text-blue-500',
+    success: 'fas fa-map-marker-alt text-emerald-500',
+    error: 'fas fa-exclamation-circle text-amber-500'
+  };
+  $('#locationNameIcon').attr('class', iconClasses[state] || iconClasses.loading);
+  $('#txtLocationName').text(message);
+}
+
+async function resolveCurrentLocationName(latitude, longitude) {
+  setLocationNameStatus('กำลังค้นหาชื่อตำบล อำเภอ และจังหวัด...', 'loading');
+  const res = await callAPI('reverse_geocode', { latitude, longitude }, true);
+  if (currentCoords.lat !== latitude || currentCoords.lng !== longitude) return;
+  if (res.success && res.location_name) {
+    currentLocationName = res.location_name;
+    setLocationNameStatus(currentLocationName, 'success');
+  } else {
+    currentLocationName = '';
+    setLocationNameStatus('ยังไม่พบชื่อสถานที่ แต่สามารถบันทึกพิกัดได้', 'error');
   }
 }
 
@@ -1323,6 +1401,7 @@ async function submitAttendance(status) {
     status, 
     latitude: currentCoords.lat, 
     longitude: currentCoords.lng, 
+    location_name: currentLocationName,
     selfie_base64: lastCapturedPhoto 
   });
   if (res.success) {
@@ -1440,6 +1519,7 @@ function renderHistory(data) {
         <div>
           <span class="inline-block px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest ${item.status === 'เข้างาน' ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'} mb-1 shadow-md shadow-opacity-20">${item.status}</span>
           <p class="font-black text-slate-700 text-[11px] leading-tight">${formatThaiDate(item.date)}</p>
+          ${item.location_name ? `<p class="mt-1 text-[10px] leading-snug text-slate-400"><i class="fas fa-map-marker-alt mr-1 text-blue-400"></i>${escapeHTML(item.location_name)}</p>` : ''}
         </div>
       </div>
       <a href="${item.map_link}" target="_blank" class="w-10 h-10 bg-slate-50 text-slate-400 rounded-xl flex items-center justify-center hover:bg-blue-600 hover:text-white transition-all shadow-sm"><i class="fas fa-map-marked-alt text-xs"></i></a>
@@ -1685,9 +1765,12 @@ function renderAdminLogs() {
       <td class="p-4 text-center">
         <span class="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${r.status==='เข้างาน'?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}">${r.status}</span>
       </td>
-      <td class="p-4 text-[10px] text-slate-400 font-mono">
-        ${(r.latitude !== undefined && r.latitude !== null && !isNaN(parseFloat(r.latitude))) ? parseFloat(r.latitude).toFixed(4) : '0.0000'}, 
-        ${(r.longitude !== undefined && r.longitude !== null && !isNaN(parseFloat(r.longitude))) ? parseFloat(r.longitude).toFixed(4) : '0.0000'}
+      <td class="p-4">
+        <div class="text-[10px] text-slate-500 font-mono whitespace-nowrap">
+          ${(r.latitude !== undefined && r.latitude !== null && !isNaN(parseFloat(r.latitude))) ? parseFloat(r.latitude).toFixed(4) : '0.0000'},
+          ${(r.longitude !== undefined && r.longitude !== null && !isNaN(parseFloat(r.longitude))) ? parseFloat(r.longitude).toFixed(4) : '0.0000'}
+        </div>
+        ${r.location_name ? `<div class="mt-1 max-w-[220px] text-[10px] leading-snug text-slate-400 font-sans"><i class="fas fa-map-marker-alt mr-1 text-blue-400"></i>${escapeHTML(r.location_name)}</div>` : ''}
       </td>
       <td class="p-3 text-center">
         <a href="${r.map_link}" target="_blank" class="w-7 h-7 bg-blue-50 text-blue-500 rounded-lg inline-flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all shadow-sm shadow-blue-100"><i class="fas fa-map-marked-alt text-[10px]"></i></a>
@@ -2598,6 +2681,7 @@ async function exportToExcel() {
         "วันเวลา": formatThaiDate(r.date), 
         "สถานะ": r.status, 
         "พิกัด": `${r.latitude},${r.longitude}`, 
+        "ตำบล / อำเภอ / จังหวัด": r.location_name || '',
         "ลิงก์แผนที่": r.map_link 
     }));
     const ws = XLSX.utils.json_to_sheet(data);
@@ -2625,6 +2709,7 @@ async function exportToCSV() {
         "วันเวลา": formatThaiDate(r.date), 
         "สถานะ": r.status, 
         "พิกัด": `"${(r.latitude && !isNaN(r.latitude)) ? parseFloat(r.latitude).toFixed(4) : '0.0000'}, ${(r.longitude && !isNaN(r.longitude)) ? parseFloat(r.longitude).toFixed(4) : '0.0000'}"`, 
+        "ตำบล / อำเภอ / จังหวัด": `"${String(r.location_name || '').replace(/"/g, '""')}"`,
         "ลิงก์แผนที่": r.map_link 
     }));
     const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + 

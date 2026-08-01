@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">WorkLogs Attendance</title>
+  <defs>
+    <linearGradient id="background" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2858B8"/>
+      <stop offset="1" stop-color="#102A67"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="22" y1="12" x2="43" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF8A7D"/>
+      <stop offset="1" stop-color="#F35F67"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#background)"/>
+  <path d="M32 10 49 17v12c0 11.4-6.8 20.8-17 25-10.2-4.2-17-13.6-17-25V17l17-7Z" fill="url(#shield)"/>
+  <path d="m23.5 31.7 5.7 5.7 11.8-12" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

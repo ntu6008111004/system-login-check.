@@ -3,14 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>WorkLogs - เข้าสู่ระบบ</title>
+  <title>เข้าสู่ระบบ | WorkLogs Attendance</title>
+  <meta name="application-name" content="WorkLogs Attendance">
+  <meta name="theme-color" content="#173a85">
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="manifest" href="site.webmanifest">
   
   <script defer src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
-  <link rel="stylesheet" href="tailwind.min.css?v=20260801-3">
-  <link rel="stylesheet" href="style.css?v=20260801-3">
+  <link rel="stylesheet" href="tailwind.min.css?v=20260801-4">
+  <link rel="stylesheet" href="style.css?v=20260801-4">
 </head>
 <body class="bg-corporate-50 min-h-screen text-slate-800 antialiased font-sans">
 
@@ -25,14 +31,9 @@
     <div id="view-login" class="h-full flex flex-col p-8 justify-center items-center bg-gradient-to-br from-corporate-50 to-white">
         <div class="w-full max-w-sm premium-card p-8 text-center animate-in fade-in slide-in-from-bottom-10 duration-700">
             <div class="mb-8 relative inline-block">
-                <div class="w-24 h-24 bg-gradient-to-tr from-corporate-900 to-blue-500 rounded-[2rem] flex items-center justify-center mx-auto shadow-2xl shadow-blue-200 text-white text-4xl">
-                    <i class="fas fa-fingerprint"></i>
-                </div>
-                <div class="absolute -bottom-2 -right-2 w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center border-4 border-white text-white text-xs shadow-lg">
-                    <i class="fas fa-check"></i>
-                </div>
+                <img src="favicon.svg" alt="WorkLogs Attendance" class="w-24 h-24 rounded-[2rem] mx-auto shadow-2xl shadow-blue-200">
             </div>
-            <h1 class="text-3xl font-extrabold text-corporate-900 mb-2 tracking-tight">WorkLogs</h1>
+            <h1 class="text-3xl font-extrabold text-corporate-900 mb-2 tracking-tight">WorkLogs Attendance</h1>
             <p class="text-slate-400 text-sm mb-10 font-medium">ระบบลงเวลาปฏิบัติงานอัจฉริยะ</p>
             
             <form id="formLogin" class="space-y-5 text-left">
@@ -64,6 +65,6 @@
     </div>
   </div>
 
-  <script defer src="app.js?v=20260801-3"></script>
+  <script defer src="app.js?v=20260801-4"></script>
 </body>
 </html>

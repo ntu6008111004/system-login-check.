@@ -31,7 +31,7 @@
 จัดทำโดย Antigravity 👸✨
 🏆 Production-Ready Attendance System
 
-## Performance Edition 1.3.1
+## Performance Edition 1.3.2
 
 เวอร์ชันนี้ปรับเส้นทางที่ใช้งานบ่อยให้เร็วขึ้นทั้งหน้าเว็บและ Google Apps Script:
 
@@ -43,6 +43,10 @@
 - โหลด MediaPipe, Leaflet และ XLSX เฉพาะหน้าหรือเวลาที่ต้องใช้
 - Tailwind ถูก compile เป็น `tailwind.min.css` แล้ว จึงไม่ต้องประมวลผล Tailwind CDN ใน browser
 - CRUD อัปเดตเฉพาะรายการบนหน้าจอ ไม่ดึงตารางผู้ใช้และ Attendance ใหม่ทั้งชุด
+- หน้าเข้าสู่ระบบใช้ JSONP แบบ hedged retry เมื่อ Google Apps Script ตอบช้า พร้อม callback และ cache-buster ใหม่ในแต่ละรอบ
+- ระบบใช้ชื่ออย่างเป็นทางการ `WorkLogs Attendance` และมี favicon/ไอคอนสำหรับ Browser, Bookmark และหน้าจอมือถือ
+- บันทึกชื่อ `ตำบล / อำเภอ / จังหวัด` จากพิกัดลงฟิลด์ `location_name` และแสดงร่วมกับพิกัดทั้งฝั่งผู้ใช้และแอดมิน
+- โครงสร้างชีตเดิมถูกเพิ่มคอลัมน์แบบอัตโนมัติ โดยข้อมูลเก่าที่ยังไม่มีชื่อสถานที่ยังแสดงผลได้ตามปกติ
 
 หลังแก้ `apps-script.gs` ต้อง Deploy เป็น Web App เวอร์ชันใหม่ก่อน แล้วจึงเผยแพร่ไฟล์ frontend ทั้งหมดบน GitHub Pages โดยเฉพาะ `tailwind.min.css`.
 

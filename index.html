@@ -3,7 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>ระบบลงเวลาเข้า-ออกงาน (WorkLogs)</title>
+  <title>WorkLogs Attendance | ระบบลงเวลาและเช็กอินพนักงาน</title>
+  <meta name="application-name" content="WorkLogs Attendance">
+  <meta name="theme-color" content="#173a85">
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="manifest" href="site.webmanifest">
   
   <script defer src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -12,8 +18,8 @@
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 
-  <link rel="stylesheet" href="tailwind.min.css?v=20260801-3">
-  <link rel="stylesheet" href="style.css?v=20260801-3">
+  <link rel="stylesheet" href="tailwind.min.css?v=20260801-4">
+  <link rel="stylesheet" href="style.css?v=20260801-4">
 </head>
 <body class="bg-corporate-50 min-h-screen text-slate-800 antialiased font-sans">
 
@@ -105,6 +111,13 @@
                 <div class="grid grid-cols-2 gap-3">
                     <div class="bg-slate-50 p-3 rounded-2xl border border-slate-100"><p class="text-[9px] text-slate-400 uppercase font-bold mb-1">LATITUDE</p><p id="txtLat" class="text-xs font-bold text-slate-700">...</p></div>
                     <div class="bg-slate-50 p-3 rounded-2xl border border-slate-100"><p class="text-[9px] text-slate-400 uppercase font-bold mb-1">LONGITUDE</p><p id="txtLon" class="text-xs font-bold text-slate-700">...</p></div>
+                </div>
+                <div class="mt-3 flex items-start gap-3 rounded-2xl border border-blue-100 bg-blue-50/70 px-3 py-2.5">
+                    <i id="locationNameIcon" class="fas fa-circle-notch fa-spin text-blue-500 mt-0.5 text-xs" aria-hidden="true"></i>
+                    <div class="min-w-0">
+                        <p class="text-[9px] font-black uppercase tracking-wide text-blue-400">ชื่อสถานที่</p>
+                        <p id="txtLocationName" class="mt-0.5 text-[10px] font-semibold leading-snug text-slate-600">กำลังรอพิกัด GPS...</p>
+                    </div>
                 </div>
             </div>
 
@@ -337,6 +350,6 @@
   </div>
 
   <canvas id="photoCanvas" class="hidden"></canvas>
-  <script defer src="app.js?v=20260801-3"></script>
+  <script defer src="app.js?v=20260801-4"></script>
 </body>
 </html>

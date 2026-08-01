@@ -4,7 +4,7 @@
 
 function logToSheet(action, type, data) {
   // Skip verbose or sensitive actions to prevent log bloat and data leaks
-  const skipActions = ["get_admin_data", "get_attendance_photo", "get_history", "get_users", "get_branches", "get_update_notice", "get_version", "login"];
+  const skipActions = ["get_admin_data", "get_attendance_photo", "get_history", "get_users", "get_branches", "get_update_notice", "get_version", "reverse_geocode", "login"];
   if (skipActions.includes(action)) return;
 
   try {
@@ -21,8 +21,8 @@ function logToSheet(action, type, data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.1";
-const SCHEMA_VERSION = "4";
+const APP_VERSION = "1.3.2";
+const SCHEMA_VERSION = "5";
 const CACHE_TTL = {
   master: 600,
   history: 120,
@@ -86,7 +86,14 @@ function doGet(e) {
     return respondJSON(result);
   } catch (error) {
     logToSheet("ERROR", "GET", { error: error.toString() });
-    return respondJSON({ success: false, message: error.toString() });
+    const failure = { success: false, message: error.toString() };
+    const callback = e && e.parameter ? e.parameter.callback : "";
+    if (callback) {
+      return ContentService.createTextOutput(
+        `${callback}(${JSON.stringify(failure)});`,
+      ).setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+    return respondJSON(failure);
   }
 }
 
@@ -129,6 +136,7 @@ function handleAction(action, data) {
   if (action === "get_branches") return getBranches();
   if (action === "get_version") return { success: true, version: APP_VERSION };
   if (action === "get_update_notice") return getUpdateNotice(data.role || "user");
+  if (action === "reverse_geocode") return reverseGeocodeLocation(data.latitude, data.longitude);
   if (action === "reset_all_passwords") return resetAllPasswords();
 
   return { success: false, message: "Unknown action: " + action };
@@ -217,6 +225,7 @@ function generateMockData() {
         13.7563,
         100.5018,
         "https://maps.google.com/?q=13.7563,100.5018",
+        "แขวงวัดโสมนัส • เขตป้อมปราบศัตรูพ่าย • กรุงเทพมหานคร",
         "",
         "Web",
       ]);
@@ -229,6 +238,7 @@ function generateMockData() {
         13.7563,
         100.5018,
         "https://maps.google.com/?q=13.7563,100.5018",
+        "แขวงวัดโสมนัส • เขตป้อมปราบศัตรูพ่าย • กรุงเทพมหานคร",
         "",
         "Web",
       ]);
@@ -255,9 +265,11 @@ function respondJSON(data) {
 
 /** 👤 DATABASE HELPERS */
 const _HEADER_CACHE = {};
+let _SPREADSHEET_CACHE = null;
 
 function getSpreadsheet() {
-  return SpreadsheetApp.openById(SPREADSHEET_ID);
+  if (!_SPREADSHEET_CACHE) _SPREADSHEET_CACHE = SpreadsheetApp.openById(SPREADSHEET_ID);
+  return _SPREADSHEET_CACHE;
 }
 
 function getScriptCache(key) {
@@ -408,9 +420,20 @@ function setupDatabase() {
       "latitude",
       "longitude",
       "map_link",
+      "location_name",
       "selfie",
       "device",
     ]);
+  } else {
+    const attendanceHeaders = getHeaders(attSheet);
+    if (attendanceHeaders.indexOf("location_name") === -1) {
+      const mapLinkIndex = attendanceHeaders.indexOf("map_link");
+      const insertAfterColumn = mapLinkIndex >= 0 ? mapLinkIndex + 1 : attSheet.getLastColumn();
+      attSheet.insertColumnAfter(insertAfterColumn);
+      attSheet.getRange(1, insertAfterColumn + 1).setValue("location_name");
+      delete _HEADER_CACHE.ATTENDANCE;
+      bumpDataVersion("attendance");
+    }
   }
   let branchesSheet = ss.getSheetByName("BRANCHES");
   if (!branchesSheet) {
@@ -442,7 +465,7 @@ function setupDatabase() {
       "01/08/2026",
       "user",
       "ระบบได้รับการปรับปรุง",
-      "โหลดหน้าใช้งานได้เร็วขึ้น|เข้าถึงเมนูต่างๆ ได้ง่ายขึ้น|ลดปัญหาการโหลดข้อมูล",
+      "เข้าสู่ระบบเสถียรขึ้นและลองเชื่อมต่อใหม่ให้อัตโนมัติ|แสดงชื่อตำบล อำเภอ และจังหวัดจากพิกัด|เพิ่มชื่อและไอคอนระบบแบบเป็นทางการ",
       true,
     ],
     [
@@ -450,7 +473,7 @@ function setupDatabase() {
       "01/08/2026",
       "admin",
       "ระบบจัดการได้รับการปรับปรุง",
-      "หน้าจัดการพนักงานและรายงานโหลดเร็วขึ้น|ทุก dropdown พิมพ์ค้นหาข้อมูลได้ ใช้งานง่ายขึ้นบนมือถือ|ค้นหาและบันทึกข้อมูลได้ไวขึ้น|ลดการโหลดข้อมูลซ้ำและข้อผิดพลาด",
+      "เข้าสู่ระบบเสถียรขึ้นและลองเชื่อมต่อใหม่ให้อัตโนมัติ|ตารางพิกัดแสดงชื่อตำบล อำเภอ และจังหวัด|ข้อมูลเดิมยังใช้งานได้แม้ไม่มีชื่อสถานที่|เพิ่มชื่อและไอคอนระบบแบบเป็นทางการ",
       true,
     ],
   ];
@@ -605,6 +628,70 @@ function resetAllPasswords() {
   return { success: true, message: "รีเซ็ตรหัสพนักงานทุกคนเป็น 1234 เรียบร้อยแล้ว" };
 }
 
+function compactLocationPart(value, prefix) {
+  const name = String(value || "").trim();
+  if (!name) return "";
+  if (/^(ตำบล|ต\.|แขวง|อำเภอ|อ\.|เขต|จังหวัด|จ\.|กรุงเทพมหานคร)/.test(name)) return name;
+  return prefix + name;
+}
+
+function findAddressComponent(components, acceptedTypes) {
+  for (let i = 0; i < components.length; i++) {
+    const types = components[i].types || [];
+    if (acceptedTypes.some(function (type) { return types.indexOf(type) !== -1; })) {
+      return components[i].long_name || components[i].short_name || "";
+    }
+  }
+  return "";
+}
+
+function reverseGeocodeLocation(latitude, longitude) {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (!isFinite(lat) || !isFinite(lng) || (lat === 0 && lng === 0)) {
+    return { success: false, location_name: "", message: "พิกัดไม่ถูกต้อง" };
+  }
+
+  const cacheKey = makeCacheKey("reverse_geocode_v2", {
+    lat: lat.toFixed(4),
+    lng: lng.toFixed(4),
+  });
+  const cached = getCachedJSON(cacheKey);
+  if (cached) return { success: true, location_name: cached, _cached: true };
+
+  try {
+    const response = Maps.newGeocoder()
+      .setLanguage("th")
+      .setRegion("th")
+      .reverseGeocode(lat, lng);
+    const result = response && response.results && response.results[0];
+    if (!result) return { success: false, location_name: "", message: "ไม่พบชื่อสถานที่" };
+
+    const components = result.address_components || [];
+    const subdistrict = findAddressComponent(components, [
+      "sublocality_level_2",
+      "administrative_area_level_3",
+    ]);
+    const district = findAddressComponent(components, [
+      "sublocality_level_1",
+      "administrative_area_level_2",
+      "locality",
+    ]);
+    const province = findAddressComponent(components, ["administrative_area_level_1"]);
+    const locationName = ([
+      compactLocationPart(subdistrict, "ต."),
+      compactLocationPart(district, "อ."),
+      compactLocationPart(province, "จ."),
+    ].filter(String).join(" • ") || String(result.formatted_address || "").trim()).slice(0, 200);
+
+    if (!locationName) return { success: false, location_name: "", message: "ไม่พบชื่อสถานที่" };
+    setCachedJSON(cacheKey, locationName, 21600);
+    return { success: true, location_name: locationName };
+  } catch (error) {
+    return { success: false, location_name: "", message: "ระบุชื่อสถานที่ไม่สำเร็จ" };
+  }
+}
+
 function saveAttendance(p) {
   const sheet =
     getSpreadsheet().getSheetByName("ATTENDANCE");
@@ -615,6 +702,11 @@ function saveAttendance(p) {
     Session.getScriptTimeZone(),
     "dd/MM/yyyy HH:mm:ss",
   );
+  let locationName = String(p.location_name || "").trim().slice(0, 200);
+  if (!locationName) {
+    const geocodeResult = reverseGeocodeLocation(p.latitude, p.longitude);
+    if (geocodeResult.success) locationName = geocodeResult.location_name;
+  }
 
   const newRow = [];
   headers.forEach((h) => {
@@ -639,6 +731,9 @@ function saveAttendance(p) {
         break;
       case "map_link":
         newRow.push(`https://maps.google.com/?q=${p.latitude},${p.longitude}`);
+        break;
+      case "location_name":
+        newRow.push(locationName);
         break;
       case "selfie":
         newRow.push(p.selfie_base64 || p.selfie || "");
@@ -675,18 +770,21 @@ function getUserHistory(userId) {
   const dateIdx = headers.indexOf("datetime");
   const statusIdx = headers.indexOf("status");
   const mapIdx = headers.indexOf("map_link");
+  const locationIdx = headers.indexOf("location_name");
 
   if (userIdx === -1) return { success: false, history: [] };
 
   const rowCount = Math.max(0, sheet.getLastRow() - 1);
   if (!rowCount) return { success: true, history: [] };
-  const firstColumn = Math.min(userIdx, dateIdx, statusIdx, mapIdx);
-  const lastColumn = Math.max(userIdx, dateIdx, statusIdx, mapIdx);
+  const historyColumns = [userIdx, dateIdx, statusIdx, mapIdx, locationIdx].filter(function (index) { return index >= 0; });
+  const firstColumn = Math.min.apply(null, historyColumns);
+  const lastColumn = Math.max.apply(null, historyColumns);
   const data = sheet.getRange(2, firstColumn + 1, rowCount, lastColumn - firstColumn + 1).getDisplayValues();
   const localUserIdx = userIdx - firstColumn;
   const localDateIdx = dateIdx - firstColumn;
   const localStatusIdx = statusIdx - firstColumn;
   const localMapIdx = mapIdx - firstColumn;
+  const localLocationIdx = locationIdx >= 0 ? locationIdx - firstColumn : -1;
 
   const history = [];
   for (let i = data.length - 1; i >= 0; i--) {
@@ -695,6 +793,7 @@ function getUserHistory(userId) {
         date: data[i][localDateIdx],
         status: data[i][localStatusIdx],
         map_link: data[i][localMapIdx],
+        location_name: localLocationIdx >= 0 ? data[i][localLocationIdx] : "",
       });
     }
   }
@@ -879,6 +978,7 @@ function getAllAttendance(params) {
   const attHeaders = getHeaders(attSheet);
   const column = {};
   attHeaders.forEach(function (header, index) { column[header.toLowerCase()] = index; });
+  const locationColumn = typeof column.location_name === "number" ? column.location_name : -1;
   const totalRows = Math.max(0, attSheet.getLastRow() - 1);
 
   const branchList = getBranches().branches || [];
@@ -893,11 +993,20 @@ function getAllAttendance(params) {
   if (!hasFilters && !query.export) {
     for (let rowNumber = totalRows + 1; rowNumber >= 2; rowNumber--) matchedRows.push(rowNumber);
   } else if (totalRows) {
+    const exportColumns = [
+      column.user_id,
+      column.datetime,
+      column.status,
+      column.latitude,
+      column.longitude,
+      column.map_link,
+      locationColumn,
+    ].filter(function (index) { return typeof index === "number" && index >= 0; });
     compactFirstColumn = query.export
-      ? Math.min(column.user_id, column.datetime, column.status, column.latitude, column.longitude, column.map_link)
+      ? Math.min.apply(null, exportColumns)
       : Math.min(column.user_id, column.datetime);
     const compactLastColumn = query.export
-      ? Math.max(column.user_id, column.datetime, column.status, column.latitude, column.longitude, column.map_link)
+      ? Math.max.apply(null, exportColumns)
       : Math.max(column.user_id, column.datetime);
     compactRows = attSheet.getRange(2, compactFirstColumn + 1, totalRows, compactLastColumn - compactFirstColumn + 1).getDisplayValues();
     const localUserColumn = column.user_id - compactFirstColumn;
@@ -929,6 +1038,7 @@ function getAllAttendance(params) {
     column.latitude,
     column.longitude,
     column.map_link,
+    locationColumn,
   );
   if (!query.export && selectedRows.length) {
     const isContiguousDescending = selectedRows.every(function (rowNumber, index) {
