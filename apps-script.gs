@@ -21,7 +21,7 @@ function logToSheet(action, type, data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.3";
+const APP_VERSION = "1.3.4";
 const SCHEMA_VERSION = "5";
 const CACHE_TTL = {
   master: 600,
@@ -276,6 +276,22 @@ function getSpreadsheet() {
 function getScriptCache(key) {
   try {
     const cache = CacheService.getScriptCache();
+    const chunkCountStr = cache.get(key + "_chunks");
+    if (chunkCountStr) {
+      const count = parseInt(chunkCountStr, 10);
+      const keys = [];
+      for (let i = 0; i < count; i++) {
+        keys.push(key + "_c" + i);
+      }
+      const map = cache.getAll(keys);
+      let full = "";
+      for (let i = 0; i < count; i++) {
+        const val = map[key + "_c" + i];
+        if (!val) return null;
+        full += val;
+      }
+      return full;
+    }
     return cache.get(key);
   } catch (e) {
     return null;
@@ -285,8 +301,24 @@ function getScriptCache(key) {
 function setScriptCache(key, valueString, ttl) {
   try {
     const cache = CacheService.getScriptCache();
-    if (valueString && valueString.length < 90000) {
-      cache.put(key, valueString, ttl || CACHE_TTL.master);
+    if (!valueString) return;
+    const effectiveTtl = ttl || CACHE_TTL.master;
+    if (valueString.length < 90000) {
+      cache.put(key, valueString, effectiveTtl);
+      cache.remove(key + "_chunks");
+    } else {
+      const chunkSize = 80000;
+      const chunks = [];
+      for (let i = 0; i < valueString.length; i += chunkSize) {
+        chunks.push(valueString.substring(i, i + chunkSize));
+      }
+      const entries = {};
+      entries[key + "_chunks"] = String(chunks.length);
+      chunks.forEach(function (c, idx) {
+        entries[key + "_c" + idx] = c;
+      });
+      cache.putAll(entries, effectiveTtl);
+      cache.remove(key);
     }
   } catch (e) {
     // Fail silently
@@ -475,7 +507,7 @@ function setupDatabase() {
       "01/08/2026",
       "user",
       "ระบบได้รับการปรับปรุง",
-      "เปิดหน้าและเปลี่ยนเมนูได้เร็วขึ้น|ลดการดาวน์โหลดรูปที่ไม่จำเป็น|แสดงสถานะกำลังโหลดให้เข้าใจง่ายขึ้น",
+      "เปิดกล้องบนคอมและมือถือได้เร็วขึ้น|ยังถ่ายรูปได้เมื่อระบบตรวจจับใบหน้าตอบช้า|ปิดหน้าต่างแจ้งเตือนได้ง่ายขึ้น",
       true,
     ],
     [
@@ -483,7 +515,7 @@ function setupDatabase() {
       "01/08/2026",
       "admin",
       "ระบบจัดการได้รับการปรับปรุง",
-      "กรองรายงานและเปลี่ยนหน้าได้เร็วขึ้น|ลดการดาวน์โหลดรูปโปรไฟล์ซ้ำ|แก้ปัญหาการดูรูปยืนยันตัวตนล่าช้า",
+      "หน้าต่างเพิ่มและแก้ไขพนักงานไม่ล้นจอ|แสดงรหัสผู้ใช้ Username และรหัสผ่านเดิม|เพิ่มปุ่มปิดและคลิกนอกหน้าต่างเพื่อออก",
       true,
     ],
   ];
@@ -895,19 +927,31 @@ function getUserProfile(userId) {
   const id = String(userId || "");
   if (!id) return { success: false, message: "Missing User ID" };
   const version = getDataVersion("users");
-  const cacheKey = "user_profile_v" + version + "_" + id;
+  const cacheKey = "user_private_v2_" + version + "_" + id;
   const cached = getCachedJSON(cacheKey);
-  if (cached !== null) return { success: true, id: id, profile: cached, _cached: true };
+  if (cached && typeof cached === "object") {
+    return {
+      success: true,
+      id: id,
+      profile: cached.profile || "",
+      password: cached.password || "",
+      _cached: true,
+    };
+  }
 
   const sheet = getSpreadsheet().getSheetByName("USERS");
   const rowNumber = getUserRowIndex().byId[id];
   const headers = getHeaders(sheet).map(function (header) { return String(header).toLowerCase(); });
   const profileColumn = headers.indexOf("profile") + 1;
-  if (!rowNumber || !profileColumn) return { success: true, id: id, profile: "" };
+  const passwordColumn = headers.indexOf("password") + 1;
+  if (!rowNumber) return { success: true, id: id, profile: "", password: "" };
 
-  const profile = sheet.getRange(rowNumber, profileColumn).getDisplayValue() || "";
-  setCachedJSON(cacheKey, profile, CACHE_TTL.master);
-  return { success: true, id: id, profile: profile };
+  const details = {
+    profile: profileColumn ? (sheet.getRange(rowNumber, profileColumn).getDisplayValue() || "") : "",
+    password: passwordColumn ? (sheet.getRange(rowNumber, passwordColumn).getDisplayValue() || "") : "",
+  };
+  setCachedJSON(cacheKey, details, CACHE_TTL.master);
+  return { success: true, id: id, profile: details.profile, password: details.password };
 }
 
 function getUserDirectory() {

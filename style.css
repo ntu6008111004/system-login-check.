@@ -238,6 +238,53 @@ input[type="month"] {
   border-radius: 0.85rem !important;
 }
 
+/* CRUD dialogs stay inside the viewport on desktop, tablet and mobile. */
+.swal2-popup.user-crud-popup {
+  width: min(680px, calc(100vw - 1.5rem)) !important;
+  max-height: calc(100dvh - 1.5rem) !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 1.25rem 1.35rem 1rem !important;
+}
+.user-crud-popup .swal2-title {
+  flex: 0 0 auto;
+  padding: 0.25rem 2.5rem 0.35rem !important;
+}
+.user-crud-popup .swal2-close {
+  top: 0.55rem !important;
+  right: 0.65rem !important;
+  width: 2.5rem !important;
+  height: 2.5rem !important;
+  color: #64748b !important;
+  border-radius: 9999px !important;
+  z-index: 5;
+}
+.user-crud-popup .swal2-close:hover {
+  color: #0f172a !important;
+  background: #f1f5f9 !important;
+}
+.user-crud-popup .user-crud-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  margin: 0.5rem 0 0 !important;
+  padding: 0 0.35rem 0.5rem !important;
+  overscroll-behavior: contain;
+}
+.user-crud-popup .swal2-actions {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  margin: 0.75rem auto 0 !important;
+  padding-top: 0.75rem;
+  background: #fff;
+}
+.user-crud-popup input[readonly] {
+  cursor: default;
+}
+
 .update-notice-popup {
   width: min(92vw, 460px) !important;
 }
@@ -439,6 +486,15 @@ input[type="month"] {
     width: calc(100vw - 1.3rem) !important;
     max-height: calc(100dvh - 1.3rem);
     padding: 1rem !important;
+  }
+  .swal2-popup.user-crud-popup {
+    width: calc(100vw - 1.3rem) !important;
+    max-height: calc(100dvh - 1.3rem) !important;
+    padding: 0.9rem 0.85rem 0.75rem !important;
+  }
+  .user-crud-popup .swal2-title {
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
   }
   .swal2-title {
     font-size: 1.25rem !important;

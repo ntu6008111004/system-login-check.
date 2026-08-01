@@ -7,6 +7,8 @@ let currentUser = null;
 let videoStream = null;
 let faceDetectionTimer = null;
 let isFaceDetectionRunning = false;
+let cameraFallbackTimer = null;
+let faceDetectionErrorCount = 0;
 let lastCapturedPhoto = null;
 let currentCoords = { lat: 0, lng: 0 };
 let currentLocationName = '';
@@ -60,7 +62,7 @@ let adminFilterTimer = null;
 let adminLoadSequence = 0;
 let historyLoadSequence = 0;
 let adminBaseDataset = { key: '', records: [], complete: false };
-const ADMIN_PREFETCH_ROWS = 100;
+const ADMIN_PREFETCH_ROWS = 50;
 
 // Utility
 const formatThaiDate = (dateStr) => {
@@ -359,7 +361,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.3";
+    const CURRENT_VERSION = "1.3.4";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -1025,26 +1027,6 @@ function callAPIJsonp(action, payload = {}, silent = false) {
     };
 
     const failAttempt = (callbackName, message) => {
-      cleanupAttempt(callbackName);
-      if (settled) return;
-      lastError = message;
-      if (attempt < maxAttempts) {
-        clearTimeout(hedgeTimer);
-        if (!silent && action === 'login') {
-          $('#loading-overlay p').text(`การเชื่อมต่อช้า กำลังลองใหม่ (${attempt + 1}/${maxAttempts})...`);
-        }
-        runAttempt();
-        return;
-      }
-      if (activeAttempts.size === 0) finish({ success: false, message: lastError });
-    };
-
-    const runAttempt = () => {
-      if (settled || attempt >= maxAttempts) return;
-      attempt += 1;
-      const callbackName = `js_cb_${Date.now()}_${attempt}_${Math.floor(Math.random() * 100000)}`;
-      const url = `${API_URL}?action=${encodeURIComponent(action)}&payload=${encodeURIComponent(payloadStr)}&callback=${callbackName}&attempt=${attempt}&_=${Date.now()}`;
-      const script = document.createElement('script');
       script.src = url;
       script.async = true;
 
@@ -1231,15 +1213,20 @@ async function setupDashboard() {
   setAttendanceStatusLoading();
   const statusPromise = checkTodayStatus(false);
   initMapAndGPS();
-  try {
-    await loadDashboardLibraries();
+  const cameraPromise = startCamera();
+
+  // Camera preview must not wait for map/face-detection CDNs. If MediaPipe is
+  // slow or unavailable, users can still take a photo with the live camera.
+  loadDashboardLibraries().then(() => {
     if (!faceDetection) initFaceDetection();
-    startCamera();
-    await statusPromise;
-  } catch (error) {
-    console.error('Dashboard library load error:', error);
-    Swal.fire('โหลดอุปกรณ์ไม่สำเร็จ', 'กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่อีกครั้ง', 'error');
-  }
+    const videoElement = document.getElementById('videoFeed');
+    if (videoStream && videoElement) startFaceDetectionLoop(videoElement);
+  }).catch(error => {
+    console.warn('Optional dashboard library unavailable:', error);
+    enableManualCameraCapture('กล้องพร้อม — ถ่ายรูปได้');
+  });
+
+  await Promise.allSettled([statusPromise, cameraPromise]);
 }
 
 function initMapAndGPS() {
@@ -1306,8 +1293,27 @@ async function startCamera() {
       throw new Error('Camera API is not supported by this browser');
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } });
+    const cameraConstraints = [
+      { video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: { ideal: 'user' } }, audio: false },
+      { video: true, audio: false }
+    ];
+    let stream = null;
+    let lastCameraError = null;
+    for (const constraints of cameraConstraints) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        break;
+      } catch (error) {
+        lastCameraError = error;
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') throw error;
+      }
+    }
+    if (!stream) throw lastCameraError || new Error('Camera stream unavailable');
+
     videoStream = stream;
+    videoElement.muted = true;
+    videoElement.autoplay = true;
+    videoElement.setAttribute('playsinline', '');
     videoElement.srcObject = stream;
 
     // MediaPipe's Camera helper requests its own media stream.  Using it after
@@ -1315,20 +1321,65 @@ async function startCamera() {
     // the preview black.  Use the existing stream for both preview and face
     // detection instead.
     await videoElement.play();
-    startFaceDetectionLoop(videoElement);
+    if (!videoElement.videoWidth || !videoElement.videoHeight) {
+      await new Promise((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => reject(new Error('Camera preview timeout')), 8000);
+        const handleReady = () => {
+          window.clearTimeout(timeoutId);
+          resolve();
+        };
+        if (videoElement.readyState >= HTMLMediaElement.HAVE_METADATA) handleReady();
+        else videoElement.addEventListener('loadedmetadata', handleReady, { once: true });
+      });
+    }
+
+    $('#videoFeed, #cameraGuide').removeClass('hidden');
+    $('#txtFaceStatus').text('กล้องพร้อม กำลังตรวจจับใบหน้า...');
+    if (faceDetection) {
+      startFaceDetectionLoop(videoElement);
+    } else {
+      cameraFallbackTimer = window.setTimeout(() => {
+        if (videoStream && !faceDetection) enableManualCameraCapture('กล้องพร้อม — ถ่ายรูปได้');
+      }, 2500);
+    }
+    return true;
   } catch (e) { 
+    stopCamera();
     console.error('Camera Error:', e);
     let msg = 'ไม่สามารถเข้าถึงกล้องได้';
     if (e.name === 'NotAllowedError') msg = 'กรุณาอนุญาตการเข้าถึงกล้องเพื่อลงเวลา';
     if (e.name === 'NotReadableError') msg = 'กล้องกำลังถูกใช้งานโดยแอปอื่น กรุณาปิดแอปที่ใช้กล้องหรือรีเฟรชเบราว์เซอร์';
     if (e.name === 'NotFoundError') msg = 'ไม่พบกล้องที่พร้อมใช้งาน กรุณาตรวจสอบการเชื่อมต่อกล้อง';
-    Swal.fire('Camera Error', msg, 'error'); 
+    if (e.message === 'Camera preview timeout') msg = 'เปิดกล้องได้แต่ภาพยังไม่พร้อม กรุณากดขอสิทธิ์กล้อง/GPS เพื่อลองใหม่';
+    Swal.fire({
+      icon: 'error',
+      title: 'เปิดกล้องไม่สำเร็จ',
+      text: msg,
+      showCloseButton: true,
+      allowOutsideClick: true,
+      confirmButtonText: 'รับทราบ'
+    });
+    return false;
   }
+}
+
+function enableManualCameraCapture(message = 'กล้องพร้อม — ถ่ายรูปได้') {
+  if (!videoStream || lastCapturedPhoto) return;
+  isFaceInFrame = true;
+  const badge = $('#faceStatusBadge');
+  badge.find('span:first').removeClass('bg-rose-500 animate-pulse').addClass('bg-emerald-500');
+  $('#txtFaceStatus').text(message);
+  $('#btnCapture').prop('disabled', false).removeClass('opacity-50');
 }
 
 function startFaceDetectionLoop(videoElement) {
   stopFaceDetectionLoop();
   if (!faceDetection) return;
+  if (cameraFallbackTimer !== null) {
+    window.clearTimeout(cameraFallbackTimer);
+    cameraFallbackTimer = null;
+  }
+  faceDetectionErrorCount = 0;
 
   const detectFace = async () => {
     if (!videoStream || lastCapturedPhoto || isFaceDetectionRunning || videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
@@ -1339,6 +1390,8 @@ function startFaceDetectionLoop(videoElement) {
     } catch (error) {
       // Keep the camera preview available even if face detection is temporarily unavailable.
       console.warn('Face detection frame skipped:', error);
+      faceDetectionErrorCount += 1;
+      if (faceDetectionErrorCount >= 3) enableManualCameraCapture('กล้องพร้อม — ถ่ายรูปได้');
     } finally {
       isFaceDetectionRunning = false;
     }
@@ -1358,6 +1411,10 @@ function stopFaceDetectionLoop() {
 
 function stopCamera() {
     stopFaceDetectionLoop();
+    if (cameraFallbackTimer !== null) {
+        window.clearTimeout(cameraFallbackTimer);
+        cameraFallbackTimer = null;
+    }
     if (videoStream) {
         videoStream.getTracks().forEach(track => track.stop());
         videoStream = null;
@@ -1384,6 +1441,7 @@ function onFaceResults(results) {
   const indicator = $('#faceIndicator');
   const txt = $('#txtFaceStatus');
   
+  faceDetectionErrorCount = 0;
   let isCentered = false;
   
   if (results.detections.length > 0) {
@@ -1420,6 +1478,17 @@ function capturePhoto() {
   const c = document.getElementById('photoCanvas');
   const ctx = c.getContext('2d');
   
+  if (!v.videoWidth || !v.videoHeight) {
+    Swal.fire({
+      icon: 'warning',
+      title: 'กล้องยังไม่พร้อม',
+      text: 'กรุณารอสักครู่แล้วลองถ่ายใหม่',
+      showCloseButton: true,
+      allowOutsideClick: true
+    });
+    return;
+  }
+
   // Smaller cap size to stay under 47K
   c.width = 400; c.height = 400 * (v.videoHeight / v.videoWidth);
   
@@ -2304,7 +2373,8 @@ function renderUsersTable() {
           ${renderUserAvatar(u)}
           <div>
             <div class="font-medium text-slate-800">${u.first_name} ${u.last_name}</div>
-            <div class="text-xs text-slate-500">${u.username}</div>
+            <div class="text-xs text-slate-500">Username: ${escapeHTML(u.username || '-')}</div>
+            <div class="text-[10px] text-slate-400">รหัสผู้ใช้: ${escapeHTML(u.id || '-')}</div>
           </div>
         </div>
       </td>
@@ -2333,7 +2403,11 @@ async function openAddUserModal() {
   if (allBranches.length === 0) await loadBranches();
   // Create modal HTML
   const modalHtml = `
-    <div id="add-user-modal" class="space-y-4 p-2">
+    <div id="add-user-modal" class="space-y-3 px-1 text-left">
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผู้ใช้</label>
+        <input class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 bg-slate-100 text-slate-500" value="ระบบสร้างให้อัตโนมัติหลังบันทึก" readonly tabindex="-1">
+      </div>
       <div class="grid grid-cols-2 gap-4">
         <div>
           <label class="block text-xs font-medium text-slate-600 mb-1">ชื่อ <span class="text-red-500">*</span></label>
@@ -2345,13 +2419,13 @@ async function openAddUserModal() {
         </div>
       </div>
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">ชื่อผู้ใช้งาน <span class="text-red-500">*</span></label>
-        <input id="swal-user" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" placeholder="ชื่อผู้ใช้สำหรับล็อกอิน">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Username เข้าใช้งานระบบ <span class="text-red-500">*</span></label>
+        <input id="swal-user" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" placeholder="กรอก Username สำหรับเข้าสู่ระบบ" autocomplete="username">
       </div>
       <div class="relative">
-        <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผ่าน</label>
+        <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผ่านเข้าใช้งานระบบ</label>
         <div class="relative">
-          <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 pr-10" type="password" placeholder="รหัสผ่าน (เว้นว่าง = 1234)">
+          <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 pr-10" type="password" placeholder="เว้นว่างเพื่อใช้รหัส 1234" autocomplete="new-password">
           <button type="button" id="toggle-pw" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
             <i class="fas fa-eye-slash text-sm"></i>
           </button>
@@ -2426,13 +2500,17 @@ async function openAddUserModal() {
     title: 'เพิ่มพนักงานใหม่',
     width: 600,
     html: modalHtml,
+    customClass: { popup: 'user-crud-popup', htmlContainer: 'user-crud-scroll' },
+    showCloseButton: true,
     showCancelButton: true,
     confirmButtonText: 'บันทึก',
     cancelButtonText: 'ยกเลิก',
     confirmButtonColor: '#3b82f6',
     cancelButtonColor: '#94a3b8',
     focusConfirm: false,
-    allowOutsideClick: false,
+    allowOutsideClick: true,
+    allowEscapeKey: true,
+    heightAuto: false,
     didOpen: () => {
       initSearchableDropdowns(Swal.getPopup());
       // Setup file input handlers after modal opens
@@ -2502,7 +2580,7 @@ async function openAddUserModal() {
       
       // Validation
       if (!username || !first_name || !last_name || !branch_id) {
-        Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, ชื่อผู้ใช้งาน, สาขา)');
+        Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, Username, สาขา)');
         return false;
       }
       
@@ -2642,12 +2720,12 @@ async function editUser(id) {
     const profilePayload = { id };
     const profileCached = getCache('get_user_profile', profilePayload, false);
     if (profileCached) {
-        u = { ...u, profile: profileCached.profile || '' };
+        u = { ...u, profile: profileCached.profile || '', password: profileCached.password || '' };
     } else {
         if (!needsLoading) showCrudLoading('กำลังเตรียมข้อมูลพนักงาน...');
         const profileResponse = await callAPI('get_user_profile', profilePayload, true);
         if (profileResponse.success) {
-            u = { ...u, profile: profileResponse.profile || '' };
+            u = { ...u, profile: profileResponse.profile || '', password: profileResponse.password || '' };
         }
     }
 
@@ -2656,7 +2734,11 @@ async function editUser(id) {
     
     // Create modal HTML
     const modalHtml = `
-    <div id="edit-user-modal" class="space-y-4 p-2">
+    <div id="edit-user-modal" class="space-y-3 px-1 text-left">
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผู้ใช้</label>
+        <input id="swal-user-id" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 bg-slate-100 text-slate-600 font-mono" value="${escapeHTML(u.id || '')}" readonly tabindex="-1">
+      </div>
       <div class="grid grid-cols-2 gap-4">
         <div>
           <label class="block text-xs font-medium text-slate-600 mb-1">ชื่อ <span class="text-red-500">*</span></label>
@@ -2668,13 +2750,13 @@ async function editUser(id) {
         </div>
       </div>
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">ชื่อผู้ใช้งาน <span class="text-red-500">*</span></label>
-        <input id="swal-user" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" placeholder="ชื่อผู้ใช้สำหรับล็อกอิน" value="${u.username || ''}">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Username เข้าใช้งานระบบ <span class="text-red-500">*</span></label>
+        <input id="swal-user" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200" placeholder="กรอก Username สำหรับเข้าสู่ระบบ" value="${escapeHTML(u.username || '')}" autocomplete="username">
       </div>
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผ่าน</label>
+        <label class="block text-xs font-medium text-slate-600 mb-1">รหัสผ่านเข้าใช้งานระบบ</label>
         <div class="relative">
-          <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 pr-10" type="password" placeholder="รหัสผ่าน" value="${decodePassword(u.password)}">
+          <input id="swal-pw" class="swal2-input !m-0 !w-full h-10 text-sm rounded-lg border-slate-200 pr-10" type="password" placeholder="รหัสผ่านเดิม" value="${escapeHTML(decodePassword(u.password))}" autocomplete="current-password">
           <button type="button" id="toggle-pw-edit" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors z-50 bg-transparent border-none p-2 cursor-pointer focus:outline-none outline-none" style="box-shadow: none;">
             <i class="fas fa-eye-slash text-sm"></i>
           </button>
@@ -2784,13 +2866,17 @@ async function editUser(id) {
         title: 'แก้ไขข้อมูลพนักงาน',
         width: 600,
         html: modalHtml,
+        customClass: { popup: 'user-crud-popup', htmlContainer: 'user-crud-scroll' },
+        showCloseButton: true,
         showCancelButton: true,
         confirmButtonText: 'บันทึก',
         cancelButtonText: 'ยกเลิก',
         confirmButtonColor: '#3b82f6',
         cancelButtonColor: '#94a3b8',
         focusConfirm: false,
-        allowOutsideClick: false,
+        allowOutsideClick: true,
+        allowEscapeKey: true,
+        heightAuto: false,
         didOpen: () => {
             initSearchableDropdowns(Swal.getPopup());
             const fileInput = document.getElementById('swal-file');
@@ -2815,20 +2901,6 @@ async function editUser(id) {
                     pwInput.type = isPass ? 'text' : 'password';
                     togglePw.innerHTML = `<i class="fas ${isPass ? 'fa-eye' : 'fa-eye-slash'} text-sm"></i>`;
                 });
-                
-                // Add System Test UI
-                const container = pwInput.parentElement.parentElement;
-                container.insertAdjacentHTML('beforeend', `
-                    <button onclick="triggerMockData()" class="btn-primary w-full py-3 mt-4">สร้างข้อมูลสมมติ 7 วัน</button>
-                    
-                    <div class="pt-6 border-t border-slate-100 mt-6">
-                        <h4 class="font-black text-slate-800 text-sm">ตรวจสอบสถานะระบบ</h4>
-                        <p class="text-slate-400 text-[10px] mt-1 leading-relaxed">ทดสอบการเชื่อมต่อ API, การสร้างผู้ใช้ และการบันทึกรูปภาพ WebP</p>
-                        <button onclick="runAdminSelfTest()" class="w-full mt-4 py-3 bg-slate-800 text-white rounded-xl font-bold text-xs hover:bg-black transition-all shadow-lg">
-                           <i class="fas fa-microscope mr-2"></i> รันระบบทดสอบ (Full Pipeline Test)
-                        </button>
-                    </div>
-                `);
             }
             
             // Click to view current profile image
@@ -2904,7 +2976,7 @@ async function editUser(id) {
             const branch_id = document.getElementById('swal-branch').value;
             
             if (!username || !first_name || !last_name || !branch_id) {
-                Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, ชื่อผู้ใช้งาน, สาขา)');
+                Swal.showValidationMessage('กรุณากรอกข้อมูลที่จำเป็นให้ครบค่ะ (ชื่อ, นามสกุล, Username, สาขา)');
                 return false;
             }
 
