@@ -21,7 +21,7 @@ function logToSheet(action, type, data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.2";
+const APP_VERSION = "1.3.3";
 const SCHEMA_VERSION = "5";
 const CACHE_TTL = {
   master: 600,
@@ -129,6 +129,7 @@ function handleAction(action, data) {
   if (action === "get_admin_data") return getAllAttendance(data || {});
   if (action === "get_attendance_photo") return getAttendancePhoto(data.id || data.attendance_id);
   if (action === "get_users") return getUsers();
+  if (action === "get_user_profile") return getUserProfile(data.id || data.user_id);
   if (action === "create_user") return createUser(data);
   if (action === "delete_user") return deleteUser(data.user_id || data.id);
   if (action === "update_user") return updateUser(data);
@@ -302,6 +303,15 @@ function getCachedJSON(key) {
   }
 }
 
+function setScriptCacheEntries(entries, ttl) {
+  try {
+    const keys = Object.keys(entries || {});
+    if (keys.length) CacheService.getScriptCache().putAll(entries, ttl || CACHE_TTL.master);
+  } catch (e) {
+    // Cache acceleration must never block the main request.
+  }
+}
+
 function setCachedJSON(key, value, ttl) {
   setScriptCache(key, JSON.stringify(value), ttl);
 }
@@ -465,7 +475,7 @@ function setupDatabase() {
       "01/08/2026",
       "user",
       "ระบบได้รับการปรับปรุง",
-      "เข้าสู่ระบบเสถียรขึ้นและลองเชื่อมต่อใหม่ให้อัตโนมัติ|แสดงชื่อตำบล อำเภอ และจังหวัดจากพิกัด|เพิ่มชื่อและไอคอนระบบแบบเป็นทางการ",
+      "เปิดหน้าและเปลี่ยนเมนูได้เร็วขึ้น|ลดการดาวน์โหลดรูปที่ไม่จำเป็น|แสดงสถานะกำลังโหลดให้เข้าใจง่ายขึ้น",
       true,
     ],
     [
@@ -473,7 +483,7 @@ function setupDatabase() {
       "01/08/2026",
       "admin",
       "ระบบจัดการได้รับการปรับปรุง",
-      "เข้าสู่ระบบเสถียรขึ้นและลองเชื่อมต่อใหม่ให้อัตโนมัติ|ตารางพิกัดแสดงชื่อตำบล อำเภอ และจังหวัด|ข้อมูลเดิมยังใช้งานได้แม้ไม่มีชื่อสถานที่|เพิ่มชื่อและไอคอนระบบแบบเป็นทางการ",
+      "กรองรายงานและเปลี่ยนหน้าได้เร็วขึ้น|ลดการดาวน์โหลดรูปโปรไฟล์ซ้ำ|แก้ปัญหาการดูรูปยืนยันตัวตนล่าช้า",
       true,
     ],
   ];
@@ -558,7 +568,7 @@ function loginUser(username, password) {
         branch_id: u.branch_id || "",
         company: u.company || "",
         role: u.role || "",
-        profile: u.profile || "",
+        profile: "",
       },
     };
   }
@@ -753,6 +763,8 @@ function saveAttendance(p) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    // Enforce the daily sequence on the server.  This prevents duplicate
+    // check-ins even when an old browser tab has stale attendance status.
     const lowercaseHeaders = headers.map(function (header) { return String(header).toLowerCase(); });
     const userIndex = lowercaseHeaders.indexOf("user_id");
     const dateIndex = lowercaseHeaders.indexOf("datetime");
@@ -842,21 +854,60 @@ function getUserHistory(userId) {
   return { success: true, history };
 }
 
+function toUserSummary(headers, row) {
+  const user = rowToObject(headers, row);
+  return {
+    id: user.id || "",
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    username: user.username || "",
+    branch_id: user.branch_id || "",
+    company: user.company || "",
+    role: user.role || "user",
+  };
+}
+
 function getUsers() {
-  const cacheKey = "db_users_v" + getDataVersion("users");
+  const cacheKey = "db_users_summary_v" + getDataVersion("users");
   const cached = getCachedJSON(cacheKey);
   if (cached) return { success: true, users: cached, _cached: true };
 
   const sheet = getSpreadsheet().getSheetByName("USERS");
   const headers = getHeaders(sheet);
-  const data = sheet.getDataRange().getDisplayValues();
+  const normalizedHeaders = headers.map(function (header) { return String(header).toLowerCase(); });
+  const summaryColumns = ["id", "first_name", "last_name", "username", "branch_id", "company", "role"]
+    .map(function (header) { return normalizedHeaders.indexOf(header); })
+    .filter(function (index) { return index >= 0; });
+  const rowCount = Math.max(0, sheet.getLastRow() - 1);
+  if (!rowCount || !summaryColumns.length) return { success: true, users: [] };
 
-  const users = data.slice(1).filter(function (row) { return row[0]; }).map(function (row) {
-    return rowToObject(headers, row);
+  const lastSummaryColumn = Math.max.apply(null, summaryColumns);
+  const data = sheet.getRange(2, 1, rowCount, lastSummaryColumn + 1).getDisplayValues();
+  const users = data.filter(function (row) { return row[0]; }).map(function (row) {
+    return toUserSummary(headers, row);
   });
 
   setCachedJSON(cacheKey, users, CACHE_TTL.master);
-  return { success: true, users };
+  return { success: true, users: users };
+}
+
+function getUserProfile(userId) {
+  const id = String(userId || "");
+  if (!id) return { success: false, message: "Missing User ID" };
+  const version = getDataVersion("users");
+  const cacheKey = "user_profile_v" + version + "_" + id;
+  const cached = getCachedJSON(cacheKey);
+  if (cached !== null) return { success: true, id: id, profile: cached, _cached: true };
+
+  const sheet = getSpreadsheet().getSheetByName("USERS");
+  const rowNumber = getUserRowIndex().byId[id];
+  const headers = getHeaders(sheet).map(function (header) { return String(header).toLowerCase(); });
+  const profileColumn = headers.indexOf("profile") + 1;
+  if (!rowNumber || !profileColumn) return { success: true, id: id, profile: "" };
+
+  const profile = sheet.getRange(rowNumber, profileColumn).getDisplayValue() || "";
+  setCachedJSON(cacheKey, profile, CACHE_TTL.master);
+  return { success: true, id: id, profile: profile };
 }
 
 function getUserDirectory() {
@@ -913,7 +964,7 @@ function createUser(u) {
     });
     sheet.getRange(sheet.getLastRow() + 1, 1, 1, newRow.length).setValues([newRow]);
     invalidateUsersCache();
-    return { success: true, id: userId, user: rowToObject(headers, newRow) };
+    return { success: true, id: userId, user: toUserSummary(headers, newRow) };
   } finally {
     lock.releaseLock();
   }
@@ -957,7 +1008,7 @@ function updateUser(u) {
     });
     sheet.getRange(rowNumber, 1, 1, headers.length).setValues([nextRow]);
     invalidateUsersCache();
-    return { success: true, id: u.id, user: rowToObject(headers, nextRow) };
+    return { success: true, id: u.id, user: toUserSummary(headers, nextRow) };
   } finally {
     lock.releaseLock();
   }
@@ -981,13 +1032,20 @@ function getAttendancePhoto(attendanceId) {
   if (!idColumn || !selfieColumn || sheet.getLastRow() < 2) {
     return { success: false, message: "Attendance photo column not found" };
   }
-  const match = sheet
-    .getRange(2, idColumn, sheet.getLastRow() - 1, 1)
-    .createTextFinder(String(attendanceId))
-    .matchEntireCell(true)
-    .findNext();
-  if (!match) return { success: false, message: "Attendance record not found" };
-  const selfie = sheet.getRange(match.getRow(), selfieColumn).getDisplayValue();
+  const attendanceVersion = getDataVersion("attendance");
+  const rowCacheKey = "attendance_photo_row_v" + attendanceVersion + "_" + String(attendanceId);
+  let rowNumber = Number(getScriptCache(rowCacheKey)) || 0;
+  if (rowNumber < 2 || rowNumber > sheet.getLastRow()) {
+    const match = sheet
+      .getRange(2, idColumn, sheet.getLastRow() - 1, 1)
+      .createTextFinder(String(attendanceId))
+      .matchEntireCell(true)
+      .findNext();
+    if (!match) return { success: false, message: "Attendance record not found" };
+    rowNumber = match.getRow();
+    setScriptCache(rowCacheKey, String(rowNumber), CACHE_TTL.history);
+  }
+  const selfie = sheet.getRange(rowNumber, selfieColumn).getDisplayValue();
   return { success: true, id: attendanceId, selfie: selfie || "" };
 }
 
@@ -1069,6 +1127,8 @@ function getAllAttendance(params) {
   const offset = (safePage - 1) * pageSize;
   const selectedRows = matchedRows.slice(offset, offset + pageSize);
   const records = [];
+  const photoRowCacheEntries = {};
+  const attendanceDataVersion = getDataVersion("attendance");
   let selectedData = [];
   const responseLastColumn = Math.max(
     column.id,
@@ -1112,7 +1172,12 @@ function getAllAttendance(params) {
     record.branch_name = branchMap[user.branch_id] || user.company || "";
     record.date = query.export ? row[column.datetime - compactFirstColumn] : row[column.datetime];
     records.push(record);
+    if (!query.export && record.id) {
+      photoRowCacheEntries["attendance_photo_row_v" + attendanceDataVersion + "_" + record.id] = String(rowNumber);
+    }
   });
+
+  setScriptCacheEntries(photoRowCacheEntries, CACHE_TTL.history);
 
   const result = {
     success: true,

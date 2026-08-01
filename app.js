@@ -1,3 +1,4 @@
+// Web App deployment v47 (01/08/2026). Keep this in sync when a new deployment URL is created.
 const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5cU9WYWZyZnBqcWlqYkR4NDFPTUpXVUZ6TWNjaGpnSGJOUjF5SUp1RENGWjVaUnBNVmczZS1WZ05zcVpBZXFaVGsvZXhlYw==';
 const API_URL = atob(_u);
 
@@ -56,6 +57,10 @@ let adminTotalPages = 1;
 const inFlightRequests = new Map();
 const memoryCache = new Map();
 let adminFilterTimer = null;
+let adminLoadSequence = 0;
+let historyLoadSequence = 0;
+let adminBaseDataset = { key: '', records: [], complete: false };
+const ADMIN_PREFETCH_ROWS = 100;
 
 // Utility
 const formatThaiDate = (dateStr) => {
@@ -321,6 +326,10 @@ function initApp() {
   
   if (savedUser) {
     currentUser = JSON.parse(savedUser);
+    if (currentUser.profile) {
+      currentUser.profile = '';
+      localStorage.setItem('worklogs_user', JSON.stringify(currentUser));
+    }
     if (isLoginPage) {
         window.location.href = 'index.html';
         return;
@@ -350,7 +359,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.2";
+    const CURRENT_VERSION = "1.3.3";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -384,6 +393,8 @@ async function checkAppVersion() {
 }
 
 function clearInternalCache() {
+    memoryCache.clear();
+    adminBaseDataset = { key: '', records: [], complete: false };
     Object.keys(localStorage).forEach(key => { 
         if(key.startsWith('cache_')) localStorage.removeItem(key); 
     });
@@ -431,6 +442,23 @@ function escapeHTML(value) {
   })[character]);
 }
 
+function getUserInitials(user = {}) {
+  const first = String(user.first_name || user.name || '').trim().charAt(0);
+  const last = String(user.last_name || '').trim().charAt(0);
+  return (first + last || 'U').toUpperCase();
+}
+
+function renderUserAvatar(user = {}) {
+  const initials = escapeHTML(getUserInitials(user));
+  return `<div class="w-10 h-10 shrink-0 rounded-full border-2 border-slate-200 bg-gradient-to-br from-blue-100 to-indigo-100 text-blue-700 shadow-sm flex items-center justify-center text-xs font-black" aria-label="รูปแทนตัวของ ${escapeHTML(`${user.first_name || ''} ${user.last_name || ''}`.trim() || 'ผู้ใช้งาน')}">${initials}</div>`;
+}
+
+function makeInitialAvatarDataUrl(name = '') {
+  const initial = escapeHTML(String(name).trim().charAt(0).toUpperCase() || 'U');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" rx="20" fill="#1e3a8a"/><text x="40" y="51" text-anchor="middle" font-family="Arial,sans-serif" font-size="34" font-weight="700" fill="#fff">${initial}</text></svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
 async function checkUpdateNotice() {
   if (!currentUser) return;
   const role = currentUser.role === 'admin' ? 'admin' : 'user';
@@ -471,14 +499,16 @@ async function showUpdateNotice(update) {
 
 const CACHE_TTL_MS = {
   get_branches: 10 * 60 * 1000,
-  get_users: 5 * 60 * 1000,
-  get_history: 2 * 60 * 1000,
-  get_admin_data: 45 * 1000,
-  get_attendance_photo: 10 * 60 * 1000,
+  get_users: 10 * 60 * 1000,
+  get_user_profile: 10 * 60 * 1000,
+  get_history: 5 * 60 * 1000,
+  get_admin_data: 90 * 1000,
+  get_attendance_photo: 30 * 60 * 1000,
   reverse_geocode: 6 * 60 * 60 * 1000,
   get_update_notice: 10 * 60 * 1000,
   get_version: 5 * 60 * 1000
 };
+const MEMORY_ONLY_CACHE_ACTIONS = new Set(['get_attendance_photo', 'get_user_profile']);
 
 function stablePayload(payload = {}) {
   return Object.keys(payload).sort().reduce((result, key) => {
@@ -497,11 +527,17 @@ function fastHash(text) {
 }
 
 function cacheKeyFor(action, payload = {}) {
-  return `cache_v2_${action}_${fastHash(JSON.stringify(stablePayload(payload)))}`;
+  return `cache_v3_${action}_${fastHash(JSON.stringify(stablePayload(payload)))}`;
 }
 
 function setCache(action, payload, data) {
-  safeCacheItem(cacheKeyFor(action, payload), data, CACHE_TTL_MS[action] || 120000);
+  const key = cacheKeyFor(action, payload);
+  const ttl = CACHE_TTL_MS[action] || 120000;
+  if (MEMORY_ONLY_CACHE_ACTIONS.has(action)) {
+    memoryCache.set(key, { savedAt: Date.now(), expiresAt: Date.now() + ttl, data });
+    return;
+  }
+  safeCacheItem(key, data, ttl);
 }
 
 function getCache(action, payload = {}, allowStale = true) {
@@ -523,8 +559,9 @@ function getCache(action, payload = {}, allowStale = true) {
 }
 
 function invalidateClientCache(action) {
-  [...memoryCache.keys()].filter(key => key.startsWith(`cache_v2_${action}_`)).forEach(key => memoryCache.delete(key));
-  Object.keys(localStorage).filter(key => key.startsWith(`cache_v2_${action}_`)).forEach(key => localStorage.removeItem(key));
+  const prefixes = [`cache_v2_${action}_`, `cache_v3_${action}_`];
+  [...memoryCache.keys()].filter(key => prefixes.some(prefix => key.startsWith(prefix))).forEach(key => memoryCache.delete(key));
+  Object.keys(localStorage).filter(key => prefixes.some(prefix => key.startsWith(prefix))).forEach(key => localStorage.removeItem(key));
 }
 
 // DELETED callAPIJsonp - Switching to POST-only approach
@@ -539,12 +576,12 @@ function initListeners() {
   $('#filterStartDate, #filterEndDate, #filterUser').on('change', () => {
     adminCurrentPage = 1;
     clearTimeout(adminFilterTimer);
-    adminFilterTimer = setTimeout(() => loadAdminData(false, true), 180);
+    adminFilterTimer = setTimeout(() => loadAdminData(), 120);
   });
   $('#filterBranch').on('change', () => {
     adminCurrentPage = 1;
     clearTimeout(adminFilterTimer);
-    adminFilterTimer = setTimeout(() => loadAdminData(false, true), 180);
+    adminFilterTimer = setTimeout(() => loadAdminData(), 120);
   });
   
   $(document).on('click', '#btnReloadAdmin', resetAdminFilters);
@@ -805,13 +842,99 @@ function enhanceSearchableDropdown(select) {
 /**
  * 🚀 API COMMUNICATION
  */
-const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_attendance_photo', 'get_users', 'get_branches', 'get_update_notice', 'get_version', 'reverse_geocode'];
+const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_attendance_photo', 'get_users', 'get_user_profile', 'get_branches', 'get_update_notice', 'get_version', 'reverse_geocode'];
+
+function buildDataApiUrl(action, payload = {}, attempt = 1) {
+  const payloadStr = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+  return `${API_URL}?action=${encodeURIComponent(action)}&payload=${encodeURIComponent(payloadStr)}&attempt=${attempt}&_=${Date.now()}`;
+}
+
+async function callAPIGet(action, payload = {}) {
+  const maxAttempts = action === 'login' ? 3 : 2;
+  const attemptTimeout = action === 'get_attendance_photo' ? 18000 : (action === 'login' ? 9000 : 12000);
+  const hedgeDelay = action === 'get_attendance_photo' ? 4500 : (action === 'login' ? 3000 : 4000);
+  let settled = false;
+  let launched = 0;
+  let active = 0;
+  let lastError = null;
+  let hedgeTimer = null;
+
+  const fetchAttempt = (attempt) => new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), attemptTimeout);
+    fetch(buildDataApiUrl(action, payload, attempt), {
+      method: 'GET',
+      mode: 'cors',
+      credentials: 'omit',
+      cache: 'no-store',
+      signal: controller.signal
+    }).then(async response => {
+      if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+      return response.json();
+    }).then(resolve).catch(reject).finally(() => clearTimeout(timeoutId));
+  });
+
+  return new Promise((resolve, reject) => {
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hedgeTimer);
+      callback(value);
+    };
+
+    const scheduleHedge = () => {
+      clearTimeout(hedgeTimer);
+      if (settled || launched >= maxAttempts) return;
+      hedgeTimer = window.setTimeout(() => {
+        if (settled) return;
+        if (action === 'login') $('#loading-overlay p').text(`การเชื่อมต่อช้า กำลังลองใหม่ (${launched + 1}/${maxAttempts})...`);
+        launchAttempt();
+      }, hedgeDelay);
+    };
+
+    const launchAttempt = () => {
+      if (settled || launched >= maxAttempts) return;
+      const attempt = ++launched;
+      active += 1;
+      fetchAttempt(attempt).then(result => {
+        if (result && result.success && !payload.export) setCache(action, payload, result);
+        finish(resolve, result);
+      }).catch(error => {
+        active -= 1;
+        lastError = error;
+        if (settled) return;
+        if (launched < maxAttempts) {
+          clearTimeout(hedgeTimer);
+          launchAttempt();
+        } else if (active === 0) {
+          finish(reject, lastError || new Error('API request failed'));
+        }
+      });
+      scheduleHedge();
+    };
+
+    launchAttempt();
+  });
+}
 
 async function callAPI(action, payload = {}, silent = false) {
   if (DATA_ACTIONS.includes(action)) {
     const requestKey = `${action}:${JSON.stringify(stablePayload(payload))}`;
     if (inFlightRequests.has(requestKey)) return inFlightRequests.get(requestKey);
-    const request = callAPIJsonp(action, payload, silent)
+    const loadingText = $('#loading-overlay p').text();
+    if (!silent) showLoading(true);
+    const request = callAPIGet(action, payload)
+      .catch(error => {
+        console.warn(`GET API fallback to JSONP (${action}):`, error);
+        return callAPIJsonp(action, payload, true);
+      })
+      .catch(error => ({ success: false, message: error?.message || 'เชื่อมต่อระบบไม่สำเร็จ' }))
+      .finally(() => {
+        if (!silent) {
+          $('#loading-overlay p').text(loadingText);
+          showLoading(false);
+        }
+      })
       .finally(() => inFlightRequests.delete(requestKey));
     inFlightRequests.set(requestKey, request);
     return request;
@@ -855,8 +978,8 @@ function callAPIJsonp(action, payload = {}, silent = false) {
 
     const payloadStr = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
     const maxAttempts = action === 'login' ? 3 : 2;
-    const attemptTimeout = action === 'login' ? 10000 : 12000;
-    const hedgeDelay = action === 'login' ? 3000 : 6000;
+    const attemptTimeout = action === 'get_attendance_photo' ? 30000 : (action === 'login' ? 10000 : 12000);
+    const hedgeDelay = action === 'get_attendance_photo' ? 5000 : (action === 'login' ? 3000 : 6000);
     const loadingText = $('#loading-overlay p').text();
     let settled = false;
     let attempt = 0;
@@ -868,7 +991,12 @@ function callAPIJsonp(action, payload = {}, silent = false) {
       const request = activeAttempts.get(callbackName);
       if (!request) return;
       clearTimeout(request.timeoutId);
-      delete window[callbackName];
+      const retiredCallback = () => {};
+      retiredCallback.__worklogsRetired = true;
+      window[callbackName] = retiredCallback;
+      window.setTimeout(() => {
+        if (window[callbackName]?.__worklogsRetired) delete window[callbackName];
+      }, 65000);
       if (request.script.parentNode) request.script.parentNode.removeChild(request.script);
       activeAttempts.delete(callbackName);
     };
@@ -1098,7 +1226,7 @@ function loadDashboardLibraries() {
 async function setupDashboard() {
   $('#txtUserName').text(currentUser.name);
   $('#txtUserCompany').text(currentUser.company);
-  const avatarUrl = currentUser.profile || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(currentUser.name)}&backgroundColor=1e3a8a`;
+  const avatarUrl = currentUser.profile || makeInitialAvatarDataUrl(currentUser.name);
   $('#userAvatar').attr('src', avatarUrl);
   setAttendanceStatusLoading();
   const statusPromise = checkTodayStatus(false);
@@ -1159,7 +1287,11 @@ async function resolveCurrentLocationName(latitude, longitude) {
   }
 }
 
-function renderMap(lat, lng) {
+function renderMap(lat, lng, retryCount = 0) {
+  if (!window.L) {
+    if (retryCount < 20) window.setTimeout(() => renderMap(lat, lng, retryCount + 1), 250);
+    return;
+  }
   if (map) { map.setView([lat, lng], 16); marker.setLatLng([lat, lng]); return; }
   map = L.map('mapPreview', { zoomControl: false }).setView([lat, lng], 16);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
@@ -1178,8 +1310,10 @@ async function startCamera() {
     videoStream = stream;
     videoElement.srcObject = stream;
 
-    // MediaPipe's Camera helper requests a second stream on the same camera.
-    // Reuse this stream for detection so desktop cameras do not conflict.
+    // MediaPipe's Camera helper requests its own media stream.  Using it after
+    // getUserMedia causes many desktop cameras to be opened twice and leaves
+    // the preview black.  Use the existing stream for both preview and face
+    // detection instead.
     await videoElement.play();
     startFaceDetectionLoop(videoElement);
   } catch (e) { 
@@ -1203,6 +1337,7 @@ function startFaceDetectionLoop(videoElement) {
     try {
       await faceDetection.send({ image: videoElement });
     } catch (error) {
+      // Keep the camera preview available even if face detection is temporarily unavailable.
       console.warn('Face detection frame skipped:', error);
     } finally {
       isFaceDetectionRunning = false;
@@ -1514,17 +1649,39 @@ async function submitAttendance(status) {
 
 async function loadHistory(force = false) {
   const payload = { user_id: currentUser.id };
+  const requestId = ++historyLoadSequence;
   const cached = force ? null : getCache('get_history', payload);
   if (cached) {
     personalHistoryData = cached.history;
     renderHistoryFiltered();
+    setHistoryLoading(true, 'กำลังตรวจสอบประวัติล่าสุด...');
+  } else {
+    renderHistorySkeleton();
+    setHistoryLoading(true, 'กำลังดึงประวัติการลงเวลา...');
   }
 
   const res = await callAPI('get_history', payload, !!cached);
+  if (requestId !== historyLoadSequence) return res;
   if (res.success) {
     personalHistoryData = res.history;
     renderHistoryFiltered();
   }
+  setHistoryLoading(false);
+  return res;
+}
+
+function setHistoryLoading(isLoading, message = '') {
+  $('#historyLoadStatus').toggleClass('hidden', !isLoading).text(message);
+  $('#historyList').attr('aria-busy', isLoading ? 'true' : 'false');
+}
+
+function renderHistorySkeleton() {
+  $('#historyList').html(Array.from({ length: 3 }, () => `
+    <div class="premium-card p-4 animate-pulse">
+      <div class="h-4 w-2/5 rounded bg-slate-100"></div>
+      <div class="mt-3 h-3 w-3/5 rounded bg-slate-100"></div>
+    </div>
+  `).join(''));
 }
 
 function clearHistFilters() {
@@ -1682,22 +1839,109 @@ async function resetAdminFilters() {
 
 async function loadAdminData(force = false, silent = false) {
   ensureDefaultAdminDates();
+  const filters = getAdminFilters();
+  const localResult = !force ? getLocalAdminFilterResult(filters) : null;
+  if (localResult) {
+    applyAdminPage(localResult);
+    setAdminTableLoading(false);
+    return { success: true, ...localResult, _local: true };
+  }
+
+  const isBaseRequest = !filters.user_id && !filters.branch_id && adminCurrentPage === 1;
   const payload = {
-    page: adminCurrentPage,
-    page_size: adminRowsPerPage,
+    page: isBaseRequest ? 1 : adminCurrentPage,
+    page_size: isBaseRequest ? ADMIN_PREFETCH_ROWS : adminRowsPerPage,
+    start_date: filters.start_date,
+    end_date: filters.end_date,
+    user_id: isBaseRequest ? '' : filters.user_id,
+    branch_id: isBaseRequest ? '' : filters.branch_id
+  };
+  const requestId = ++adminLoadSequence;
+  const cached = force ? null : getCache('get_admin_data', payload);
+  if (cached) {
+    storeAdminBaseDataset(cached, filters, isBaseRequest);
+    applyAdminResultForFilters(cached, filters, isBaseRequest);
+  } else if (!silent) {
+    renderAdminSkeleton();
+  }
+  if (!silent) setAdminTableLoading(true, cached ? 'กำลังตรวจสอบข้อมูลล่าสุด...' : 'กำลังดึงรายงาน...');
+
+  const res = await callAPI('get_admin_data', payload, true);
+  if (requestId !== adminLoadSequence) return res;
+  if (res.success) {
+    storeAdminBaseDataset(res, filters, isBaseRequest);
+    applyAdminResultForFilters(res, filters, isBaseRequest);
+  } else if (!cached && !silent) {
+    showDataError('#adminTableBody', 6);
+  }
+  if (!silent) setAdminTableLoading(false);
+  return res;
+}
+
+function getAdminFilters() {
+  return {
     start_date: $('#filterStartDate').val() || '',
     end_date: $('#filterEndDate').val() || '',
     user_id: $('#filterUser').val() || '',
     branch_id: $('#filterBranch').val() || ''
   };
-  const cached = force ? null : getCache('get_admin_data', payload);
-  if (cached) applyAdminPage(cached);
-  if (!cached && !silent) renderAdminSkeleton();
+}
 
-  const res = await callAPI('get_admin_data', payload, true);
-  if (res.success) applyAdminPage(res);
-  else if (!cached && !silent) showDataError('#adminTableBody', 6);
-  return res;
+function adminRangeKey(filters) {
+  return `${filters.start_date}|${filters.end_date}`;
+}
+
+function storeAdminBaseDataset(result, filters, isBaseRequest) {
+  if (!isBaseRequest) return;
+  const records = result.records || [];
+  adminBaseDataset = {
+    key: adminRangeKey(filters),
+    records,
+    complete: Number(result.total || 0) <= records.length
+  };
+}
+
+function getLocalAdminFilterResult(filters) {
+  if (!adminBaseDataset.complete || adminBaseDataset.key !== adminRangeKey(filters)) return null;
+  const records = adminBaseDataset.records.filter(record => {
+    if (filters.user_id && String(record.user_id) !== String(filters.user_id)) return false;
+    if (filters.branch_id && String(record.branch_id) !== String(filters.branch_id)) return false;
+    return true;
+  });
+  const total = records.length;
+  const totalPages = Math.max(1, Math.ceil(total / adminRowsPerPage));
+  adminCurrentPage = Math.min(Math.max(1, adminCurrentPage), totalPages);
+  const start = (adminCurrentPage - 1) * adminRowsPerPage;
+  return {
+    success: true,
+    records: records.slice(start, start + adminRowsPerPage),
+    total,
+    page: adminCurrentPage,
+    page_size: adminRowsPerPage,
+    total_pages: totalPages
+  };
+}
+
+function applyAdminResultForFilters(result, filters, isBaseRequest) {
+  const localResult = getLocalAdminFilterResult(filters);
+  if (localResult && (isBaseRequest || adminBaseDataset.complete)) {
+    applyAdminPage(localResult);
+    return;
+  }
+  const records = (result.records || []).slice(0, adminRowsPerPage);
+  applyAdminPage({
+    ...result,
+    records,
+    page: isBaseRequest ? 1 : result.page,
+    page_size: adminRowsPerPage,
+    total_pages: Math.max(1, Math.ceil(Number(result.total || 0) / adminRowsPerPage))
+  });
+}
+
+function setAdminTableLoading(isLoading, message = '') {
+  $('#adminTableLoading').toggleClass('hidden', !isLoading);
+  $('#adminTableLoadingText').text(message || 'กำลังดึงข้อมูล...');
+  $('#adminTableBody').attr('aria-busy', isLoading ? 'true' : 'false');
 }
 
 async function loadUsers(force = false, silent = false) {
@@ -1735,6 +1979,27 @@ async function loadBranches(force = false) {
     console.error('Error loading branches:', err);
     return { success: false, branches: allBranches };
   }
+}
+
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Attendance records are returned as "DD/MM/YYYY HH:mm:ss" by Apps Script.
+// Normalize that format before comparing it with today's local date.
+function getAttendanceDateKey(value) {
+  const dateText = String(value || '').trim();
+  const thaiDate = dateText.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (thaiDate) {
+    const [, day, month, year] = thaiDate;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  const isoDate = dateText.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return isoDate ? isoDate[0] : '';
 }
 
 function applyBranches(branches) {
@@ -1867,13 +2132,16 @@ function renderAdminLogs() {
 async function showAttendancePhoto(attendanceId) {
   const payload = { id: attendanceId };
   const cached = getCache('get_attendance_photo', payload, false);
-  if (cached && cached.selfie) {
-    showImageLightbox(cached.selfie, 'รูปยืนยันตัวตน');
+  if (cached) {
+    if (cached.selfie) showImageLightbox(cached.selfie, 'รูปยืนยันตัวตน');
+    else Swal.fire('ไม่พบรูปภาพ', 'รายการนี้ไม่มีรูปยืนยันตัวตน', 'info');
     return;
   }
   Swal.fire({
     title: 'กำลังโหลดรูป...',
+    html: '<p class="text-xs text-slate-400">รูปจะถูกโหลดเมื่อเลือกดูเท่านั้น</p>',
     allowOutsideClick: false,
+    allowEscapeKey: false,
     didOpen: () => Swal.showLoading()
   });
   const response = await callAPI('get_attendance_photo', payload, true);
@@ -1886,7 +2154,7 @@ function changeAdminPage(offset) {
     const nextPage = Math.min(adminTotalPages, Math.max(1, adminCurrentPage + offset));
     if (nextPage === adminCurrentPage) return;
     adminCurrentPage = nextPage;
-    loadAdminData(false, true);
+    loadAdminData();
     $('#admin-sub-logs').parent().scrollTop(0);
 }
 
@@ -1952,7 +2220,8 @@ async function runAdminSelfTest() {
     const found1 = list1.success ? (list1.users || []).find(u => u.username === testUsername) : null;
     createdUserId = found1?.id || '';
     push('get_users (after create)', !!found1, found1 ? `พบ user id: ${createdUserId}` : 'ไม่พบผู้ใช้ทดสอบ');
-    push('profile saved (after create)', !!(found1 && found1.profile && String(found1.profile).startsWith('data:image/')), found1?.profile ? 'มีค่า profile' : 'profile ว่าง/ไม่มี');
+    const profile1 = createdUserId ? await callAPI('get_user_profile', { id: createdUserId }, true) : null;
+    push('profile saved (after create)', !!(profile1 && profile1.profile && String(profile1.profile).startsWith('data:image/')), profile1?.profile ? 'มีค่า profile' : 'profile ว่าง/ไม่มี');
 
     // 3) save_attendance (MOCK PHOTO TEST)
     if (createdUserId) {
@@ -1975,7 +2244,7 @@ async function runAdminSelfTest() {
         first_name: testFirst,
         last_name: testLast,
         username: testUsername,
-        password: found1.password,
+        password: '',
         company: newCompany,
         role: 'admin',
         profile: testProfile
@@ -1987,7 +2256,8 @@ async function runAdminSelfTest() {
       push('get_users (after update)', !!found2, found2 ? 'ดึงข้อมูลหลังอัปเดตได้' : 'ไม่พบผู้ใช้ทดสอบหลังอัปเดต');
       push('company updated', !!(found2 && found2.company === newCompany), found2 ? `company: ${found2.company}` : '');
       push('role updated', !!(found2 && found2.role === 'admin'), found2 ? `role: ${found2.role}` : '');
-      push('profile still present', !!(found2 && found2.profile && String(found2.profile).startsWith('data:image/')), found2?.profile ? 'มีค่า profile' : 'profile ว่าง/ไม่มี');
+      const profile2 = await callAPI('get_user_profile', { id: createdUserId }, true);
+      push('profile still present', !!(profile2 && profile2.profile && String(profile2.profile).startsWith('data:image/')), profile2?.profile ? 'มีค่า profile' : 'profile ว่าง/ไม่มี');
     } else {
       push('update_user', false, 'ข้ามเพราะไม่พบ createdUserId');
     }
@@ -2031,7 +2301,7 @@ function renderUsersTable() {
     <tr class="border-b hover:bg-slate-50 transition-colors">
       <td class="p-2">
         <div class="flex items-center gap-3">
-          <img src="${u.profile || `https://api.dicebear.com/7.x/avataaars/svg?seed=${u.first_name}`}" class="w-10 h-10 rounded-full object-cover border-2 border-slate-200 shadow-sm" alt="${u.first_name}">
+          ${renderUserAvatar(u)}
           <div>
             <div class="font-medium text-slate-800">${u.first_name} ${u.last_name}</div>
             <div class="text-xs text-slate-500">${u.username}</div>
@@ -2286,10 +2556,11 @@ async function openAddUserModal() {
     if (confirmResult.isConfirmed) {
       showCrudLoading('กำลังเพิ่มพนักงาน...');
       const res = await callAPI('create_user', result.value, true);
-      if (res.success) {
+  if (res.success) {
         const createdUser = res.user || { ...result.value, id: res.id };
         adminUsers = [...adminUsers, createdUser];
         invalidateClientCache('get_users');
+        invalidateClientCache('get_user_profile');
         updateAdminUserFilter();
         Swal.fire({
           icon: 'success',
@@ -2298,8 +2569,8 @@ async function openAddUserModal() {
           timer: 1500,
           showConfirmButton: false
         });
-      } else {
-        Swal.fire({
+  } else {
+    Swal.fire({
           icon: 'error',
           title: 'บันทึกไม่สำเร็จ',
           text: res.message || 'ไม่สามารถเพิ่มพนักงานได้ กรุณาลองใหม่อีกครั้งค่ะ',
@@ -2328,6 +2599,7 @@ async function confirmDeleteUser(id) {
         if (res.success) { 
             adminUsers = adminUsers.filter(user => String(user.id) !== String(id));
             invalidateClientCache('get_users');
+            invalidateClientCache('get_user_profile');
             updateAdminUserFilter();
             Swal.fire('ลบแล้ว', 'ลบข้อมูลพนักงานเรียบร้อยแล้ว', 'success'); 
         } else {
@@ -2361,14 +2633,26 @@ async function editUser(id) {
         }
     }
 
-    const u = adminUsers.find(x => x.id === id);
+    let u = adminUsers.find(x => x.id === id);
     if (!u) {
         Swal.fire('ข้อผิดพลาด', 'ไม่พบข้อมูลพนักงาน', 'error');
         return;
     }
 
-    // Ensure loading state is cleared if it was shown
-    if (needsLoading) Swal.close();
+    const profilePayload = { id };
+    const profileCached = getCache('get_user_profile', profilePayload, false);
+    if (profileCached) {
+        u = { ...u, profile: profileCached.profile || '' };
+    } else {
+        if (!needsLoading) showCrudLoading('กำลังเตรียมข้อมูลพนักงาน...');
+        const profileResponse = await callAPI('get_user_profile', profilePayload, true);
+        if (profileResponse.success) {
+            u = { ...u, profile: profileResponse.profile || '' };
+        }
+    }
+
+    // Ensure loading state is cleared before opening the editor.
+    Swal.close();
     
     // Create modal HTML
     const modalHtml = `
@@ -2643,10 +2927,8 @@ async function editUser(id) {
             }
             
             const pass = document.getElementById('swal-pw').value;
-            // SMART HASH: Only hash if user actually changed the password field 
-            // and it's not and the new value isn't already the hash we pulled.
-            const isPasswordChanged = (pass !== u.password);
-            const finalPassword = isPasswordChanged ? await hashPassword(pass) : u.password;
+            // A blank field keeps the existing password on the server; passwords are no longer sent with the user list.
+            const finalPassword = pass ? await hashPassword(pass) : '';
 
             const branch_name = allBranches.find(b => b.id === branch_id)?.name || '';
             const role = document.getElementById('swal-role').value;
@@ -2692,6 +2974,7 @@ async function editUser(id) {
                 const updatedUser = res.user || result.value;
                 adminUsers = adminUsers.map(user => String(user.id) === String(id) ? { ...user, ...updatedUser } : user);
                 invalidateClientCache('get_users');
+                invalidateClientCache('get_user_profile');
                 invalidateClientCache('get_admin_data');
                 updateAdminUserFilter();
                 Swal.fire({
