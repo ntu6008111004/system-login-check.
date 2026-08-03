@@ -984,10 +984,19 @@ async function callAPI(action, payload = {}, silent = false) {
   }
 
   // Fallback to GET JSONP/Fetch if POST fails completely on iOS Safari
+  // ⚠️ ต้ดตัด selfie/รูปภาพออกจาก payload ก่อน เพราะ GET ยัด URL ไม่ไหว
   try {
     console.warn(`Fallback POST to GET pipeline for (${action})`);
-    const getRes = await callAPIGet(action, payload);
+    const safePayload = Object.assign({}, payload);
+    delete safePayload.selfie;
+    delete safePayload.selfie_base64;
+    delete safePayload.photo;
+    const getRes = await callAPIGet(action, safePayload);
     if (!silent) showLoading(false);
+    // ถ้าเป็น save_attendance → รูปจะหาย → เตือน user
+    if (action === 'save_attendance' && getRes.success) {
+      console.warn('⚠️ Attendance saved via GET fallback - photo may not be saved');
+    }
     return getRes;
   } catch (fallbackErr) {
     console.error(`API Error (${action}):`, lastPostError || fallbackErr);
@@ -1259,12 +1268,26 @@ function loadDashboardLibraries() {
 }
 
 async function setupDashboard() {
+  // รีเซ็ต photo/attendance state ทุกครั้งที่เข้า dashboard
+  lastCapturedPhoto = null;
+  isPhotoConfirmed = false;
+  isFaceInFrame = false;
+  isAttendanceStatusResolved = false;
+
   $('#txtUserName').text(currentUser.name);
   $('#txtUserCompany').text(currentUser.company);
   const avatarUrl = currentUser.profile || makeInitialAvatarDataUrl(currentUser.name);
   $('#userAvatar').attr('src', avatarUrl);
+
+  // Reset photo UI
+  $('#photoPreview, #photoReviewOverlay').addClass('hidden');
+  $('#videoFeed, #cameraGuide').removeClass('hidden');
+  $('#btnRetake, #btnConfirmPhoto').addClass('hidden');
+  $('#btnCapture').removeClass('hidden').html('<i class="fas fa-camera"></i> ถ่ายรูปเซลฟี่').prop('disabled', true).addClass('opacity-50');
+
   setAttendanceStatusLoading();
-  const statusPromise = checkTodayStatus(false);
+  // Force fresh เสมอเพื่อป้องกันสถานะไม่ตรง
+  const statusPromise = checkTodayStatus(false, true);
   initMapAndGPS();
   const cameraPromise = startCamera();
 
@@ -1748,16 +1771,62 @@ function getAttendanceDateKey(value) {
 }
 
 async function submitAttendance(status) {
-  const photoToSend = lastCapturedPhoto;
-  if (!photoToSend || photoToSend.length < 100) {
+  // ===== STEP 1: ตรวจสอบรูปเบื้องต้น =====
+  if (!lastCapturedPhoto || typeof lastCapturedPhoto !== 'string' || lastCapturedPhoto.length < 100 || !lastCapturedPhoto.startsWith('data:image')) {
     Swal.fire({
       icon: 'error',
-      title: 'รูปถ่ายไม่สมบูรณ์',
-      text: 'ไม่พบรูปถ่ายเซลฟี่ กรุณากดถ่ายรูปใหม่อีกครั้งค่ะ',
+      title: 'ไม่พบรูปถ่ายเซลฟี่',
+      html: '<p class="text-sm">กรุณากดถ่ายรูปเซลฟี่ใหม่อีกครั้งค่ะ</p><p class="text-xs text-slate-400 mt-2">⚠️ หากถ่ายแล้วยังฟ้องอีก ให้กดปุ่ม "ถ่ายใหม่" แล้วถ่ายอีกครั้ง</p>',
       confirmButtonText: 'ตกลง'
     });
     return retakePhoto();
   }
+
+  // ===== STEP 2: บีบอัดรูปให้เล็กลง (ป้องกัน Google Sheets cell limit 50K) =====
+  showLoading(true);
+  $('#loading-overlay p').text('กำลังบีบอัดรูปภาพ...');
+  let compressedPhoto;
+  try {
+    compressedPhoto = await compressImage(lastCapturedPhoto, 280, 0.45);
+  } catch (compressError) {
+    console.warn('Photo compression failed, using original:', compressError);
+    compressedPhoto = lastCapturedPhoto;
+  }
+
+  // ===== STEP 3: ตรวจสอบรูปหลังบีบอัด =====
+  const photoSizeKB = Math.round(compressedPhoto.length / 1024);
+  console.log(`📸 Photo size after compression: ${compressedPhoto.length} chars (~${photoSizeKB}KB)`);
+
+  if (!compressedPhoto || compressedPhoto.length < 100 || !compressedPhoto.startsWith('data:image')) {
+    showLoading(false);
+    Swal.fire({
+      icon: 'error',
+      title: 'รูปถ่ายเสียหาย',
+      html: '<p class="text-sm">ไม่สามารถบีบอัดรูปถ่ายได้ กรุณาถ่ายรูปใหม่ค่ะ</p>',
+      confirmButtonText: 'ถ่ายรูปใหม่'
+    });
+    return retakePhoto();
+  }
+
+  // ถ้ารูปยังใหญ่เกินไป (> 45K chars) → บีบอัดอีกรอบด้วย quality ต่ำลง
+  if (compressedPhoto.length > 45000) {
+    console.warn(`📸 Photo still too large (${compressedPhoto.length} chars), re-compressing...`);
+    try {
+      compressedPhoto = await compressImage(compressedPhoto, 200, 0.3);
+      console.log(`📸 Re-compressed: ${compressedPhoto.length} chars (~${Math.round(compressedPhoto.length / 1024)}KB)`);
+    } catch (e) {
+      // ใช้รูปเดิมถ้าบีบอัดไม่ได้
+    }
+  }
+
+  // ถ้ายังใหญ่อยู่ → เตือนแต่ยังส่งไป (ให้ server ตัดสินใจ)
+  if (compressedPhoto.length > 49000) {
+    console.warn(`📸 WARNING: Photo exceeds Google Sheets cell limit (${compressedPhoto.length} chars)`);
+  }
+
+  // ===== STEP 4: ส่งข้อมูลไป server =====
+  $('#loading-overlay p').text('กำลังบันทึกข้อมูล...');
+  showLoading(false); // ให้ callAPI จัดการ loading เอง
 
   const res = await callAPI('save_attendance', { 
     user_id: currentUser.id, 
@@ -1765,12 +1834,14 @@ async function submitAttendance(status) {
     latitude: currentCoords.lat, 
     longitude: currentCoords.lng, 
     location_name: currentLocationName,
-    selfie_base64: photoToSend,
-    selfie: photoToSend
+    selfie_base64: compressedPhoto,
+    selfie: compressedPhoto
   });
+
   if (res.success) {
-    // ล้าง history cache ทันทีเพื่อให้ checkTodayStatus ได้ข้อมูลสดจาก server
-    invalidateClientCache('get_history');
+    // ===== STEP 5: บันทึกสำเร็จ → ล้างทุกอย่างบน dashboard =====
+    resetDashboardState();
+
     Swal.fire({
       icon: 'success',
       title: 'บันทึกสำเร็จ',
@@ -1778,14 +1849,10 @@ async function submitAttendance(status) {
       timer: 1500,
       showConfirmButton: false
     }).then(() => {
-        retakePhoto();
-        // forceFresh=true: บังคับดึงสถานะใหม่จาก server ไม่ใช้ cache
-        checkTodayStatus(true, true);
         switchView('history');
     });
   } else {
     if (res.code === 'ATTENDANCE_STATUS_MISMATCH') {
-      // Sync สถานะกับ server ทันที
       invalidateClientCache('get_history');
       await checkTodayStatus(true, true);
       return Swal.fire({
@@ -1805,6 +1872,43 @@ async function submitAttendance(status) {
     });
   }
 }
+
+/**
+ * 🧹 FULL DASHBOARD STATE RESET
+ * ล้างทุกอย่างบนหน้า dashboard ยกเว้น:
+ * - Login session (worklogs_user)
+ * - สิทธิ์กล้อง/GPS (browser-managed)
+ * - จดจำฉัน (chkRemember)
+ */
+function resetDashboardState() {
+  // ล้าง photo state
+  lastCapturedPhoto = null;
+  isPhotoConfirmed = false;
+  isFaceInFrame = false;
+
+  // ล้าง location state (จะ re-init เมื่อเข้า dashboard อีกครั้ง)
+  currentCoords = { lat: 0, lng: 0 };
+  currentLocationName = '';
+  isLocationReady = false;
+
+  // ล้าง attendance state
+  hasCheckedInToday = false;
+  hasCheckedOutToday = false;
+  isAttendanceStatusResolved = false;
+
+  // ล้าง cache ทั้งหมด (ยกเว้น login data)
+  invalidateClientCache('get_history');
+  clearInternalCache();
+
+  // Reset UI elements
+  $('#photoPreview, #photoReviewOverlay').addClass('hidden');
+  $('#videoFeed, #cameraGuide').removeClass('hidden');
+  $('#btnRetake, #btnConfirmPhoto').addClass('hidden');
+  $('#btnCapture').removeClass('hidden').html('<i class="fas fa-camera"></i> ถ่ายรูปเซลฟี่').prop('disabled', true).addClass('opacity-50');
+  $('#txtLat').text('...');
+  $('#txtLon').text('...');
+}
+
 
 async function loadHistory(force = false) {
   const payload = { user_id: currentUser.id };
