@@ -507,8 +507,6 @@ async function showUpdateNotice(update) {
   if (result.isConfirmed) localStorage.setItem(seenKey, '1');
 }
 
-const memoryCache = new Map();
-
 const CACHE_TTL_MS = {
   get_branches: 10 * 60 * 1000,
   get_users: 10 * 60 * 1000,
