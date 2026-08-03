@@ -590,19 +590,22 @@ document.addEventListener('visibilitychange', () => {
  * 🔄 FORCE REFRESH DASHBOARD
  * Called manually by user via refresh button on dashboard
  */
-function forceRefreshDashboard() {
+function forceRefreshDashboard(btnElement) {
     if (!currentUser) return;
     
     // Animate button for feedback
-    const btn = event.currentTarget.querySelector('i');
-    if (btn) btn.classList.add('fa-spin');
+    let btnIcon = null;
+    if (btnElement) {
+        btnIcon = btnElement.querySelector('i');
+        if (btnIcon) btnIcon.classList.add('fa-spin');
+    }
     
     // ล้าง Cache ของข้อมูลปัจจุบันทั้งหมด
     invalidateClientCache('get_history');
     
     // ให้ checkTodayStatus ทำงานแบบแสดง UI (silent=false)
     checkTodayStatus(false, true).then(() => {
-        if (btn) btn.classList.remove('fa-spin');
+        if (btnIcon) btnIcon.classList.remove('fa-spin');
         
         Swal.fire({
             icon: 'success',
