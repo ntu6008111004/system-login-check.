@@ -21,7 +21,7 @@ function logToSheet(action, type, data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.5";
+const APP_VERSION = "1.3.6";
 const SCHEMA_VERSION = "7";
 const CACHE_TTL = {
   master: 600,
@@ -131,7 +131,7 @@ function doPost(e) {
 function handleAction(action, data) {
   if (action === "login") return loginUser(data.username, data.password);
   if (action === "save_attendance") return saveAttendance(data);
-  if (action === "get_history") return getUserHistory(data.user_id);
+  if (action === "get_history") return getUserHistory(data.user_id, data.force_fresh);
   if (action === "get_admin_data") return getAllAttendance(data || {});
   if (action === "get_attendance_photo") return getAttendancePhoto(data.id || data.attendance_id);
   if (action === "get_users") return getUsers();
@@ -509,19 +509,19 @@ function setupDatabase() {
 
   const updateRows = [
     [
-      "1.3.5",
-      "01/08/2026",
+      "1.3.6",
+      "03/08/2026",
       "user",
-      "ระบบบันทึกเวลาได้รับการปรับปรุง",
-      "ปรับปรุงการลงเวลาบนมือถือ iOS/Safari ให้เสถียร 100%|แก้ปัญหา Load failed และเพิ่มความเร็วในการเข้าสู่ระบบ|แก้ปัญหารูปถ่ายเซลฟี่ไม่บันทึกลงฐานข้อมูล",
+      "แก้ไขสถานะการลงเวลาและรูปภาพ",
+      "แก้ปัญหาบางเครื่องยังไม่เข้างานแต่แสดงว่าเข้าแล้ว|แก้ปัญหารูปภาพไม่แสดงสำหรับบางคน|ปรับปรุงการล้าง cache อัตโนมัติเมื่อมีการอัปเดต|สถานะการลงเวลาแม่นยำขึ้นทันทีหลังบันทึก",
       true,
     ],
     [
-      "1.3.5",
-      "01/08/2026",
+      "1.3.6",
+      "03/08/2026",
       "admin",
-      "ระบบจัดการได้รับการปรับปรุง",
-      "ปรับปรุงการดึงรูปเซลฟี่ Base64 ให้แสดงผลถูกต้อง 100%|แสดงรหัสผ่านผู้ใช้ทุกคนในหน้าแก้ไขพนักงาน|ปรับปรุงความเร็วการโหลดข้อมูลและการเข้าสู่ระบบ",
+      "แก้ไข Cache และสถานะการลงเวลา",
+      "แก้ปัญหาสถานะเข้างานไม่อัปเดตบางเครื่อง|แก้ปัญหารูปเซลฟี่ไม่แสดงในบางกรณี|เพิ่ม force-fresh สำหรับตรวจสอบสถานะแบบ Real-time|ปรับปรุง cache invalidation ทุก layer",
       true,
     ],
   ];
@@ -874,10 +874,13 @@ function saveAttendance(p) {
   return { success: true };
 }
 
-function getUserHistory(userId) {
+function getUserHistory(userId, forceFresh) {
   const cacheKey = "db_history_" + userId + "_v" + getDataVersion("attendance");
-  const cached = getCachedJSON(cacheKey);
-  if (cached) return { success: true, history: cached, _cached: true };
+  // ถ้า forceFresh = true ให้ไม่ใช้ cache ของ Script เพื่อแก้ปัญหาสถานะไม่อัปเดต
+  if (!forceFresh) {
+    const cached = getCachedJSON(cacheKey);
+    if (cached) return { success: true, history: cached, _cached: true };
+  }
 
   const sheet =
     getSpreadsheet().getSheetByName("ATTENDANCE");

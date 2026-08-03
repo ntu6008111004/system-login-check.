@@ -1,4 +1,4 @@
-// Web App deployment v56 (01/08/2026). Keep this in sync when a new deployment URL is created.
+// Web App deployment v57 (03/08/2026). Keep this in sync when a new deployment URL is created.
 const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5cU9WYWZyZnBqcWlqYkR4NDFPTUpXVUZ6TWNjaGpnSGJOUjF5SUp1RENGWjVaUnBNVmczZS1WZ05zcVpBZXFaVGsvZXhlYw==';
 const API_URL = atob(_u);
 
@@ -371,7 +371,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.4";
+    const CURRENT_VERSION = "1.3.6";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -384,21 +384,23 @@ async function checkAppVersion() {
             
             // หากเวอร์ชันที่รันอยู่ (ในไฟล์) ไม่ตรงกับ Server
             if (CURRENT_VERSION !== serverVersion) {
-                // วิธีอัปเดตแบบ "ไม่กระทบผู้ใช้":
-                // 1. ถ้ายังไม่ Login (อยู่ที่หน้า Login) -> รีโหลดได้เลยเพราะไม่มีข้อมูลค้าง
-                // 2. ถ้า Login แล้ว -> ไม่รีโหลดทันที แต่จะล้าง cache ในรอบหน้า 
-                //    หรือรอจนกว่าผู้ใช้จะ Logout/Refresh เอง
-                
-                const isLoginPage = window.location.pathname.endsWith('login.html');
-                if (isLoginPage) {
-                    // ล้าง cache และ reload เงียบๆ
+                // ป้องกัน reload loop: ตรวจว่าเราเพิ่ง reload มาจาก version check นี้แล้วหรือยัง
+                const alreadyReloaded = new URLSearchParams(window.location.search).get('_v');
+                if (alreadyReloaded) {
+                    // ถ้าเพิ่ง reload มาแล้วแต่ version ยังไม่ตรง แสดงว่า deploy ยังไม่ update
+                    // แค่ล้าง cache แล้วรอ user refresh เอง
                     clearInternalCache();
-                    window.location.reload(true);
-                } else {
-                    // ถ้ากำลังใช้งานอยู่ แค่ล้าง cache ข้อมูลไว้ รอบหน้าจะโหลดใหม่เอง
-                    clearInternalCache();
-
+                    return;
                 }
+
+                // ล้าง cache ทุกกรณี เพื่อให้ผู้ใช้ได้ข้อมูลใหม่เสมอ
+                clearInternalCache();
+
+                // Force reload ทุก page (login และ index) เพื่อให้ JS ใหม่ถูกโหลด
+                // ใช้ timestamp เป็น query string เพื่อ bypass browser cache
+                const currentUrl = window.location.href.split('?')[0];
+                const newUrl = currentUrl + '?_v=' + serverVersion.replace(/\./g, '') + '&_t=' + Date.now();
+                window.location.replace(newUrl);
             }
         }
     }
@@ -407,8 +409,13 @@ async function checkAppVersion() {
 function clearInternalCache() {
     memoryCache.clear();
     adminBaseDataset = { key: '', records: [], complete: false };
+    // ล้าง cache ทุกประเภท: ข้อมูล (cache_), ประวัติ (db_history_), และรูป (attendance_photo_)
     Object.keys(localStorage).forEach(key => { 
-        if(key.startsWith('cache_')) localStorage.removeItem(key); 
+        if (key.startsWith('cache_') ||
+            key.startsWith('db_history_') ||
+            key.startsWith('attendance_photo_')) {
+            localStorage.removeItem(key);
+        }
     });
 }
 
@@ -1676,11 +1683,18 @@ async function handleAttendanceClick(status) {
   return submitAttendance(status);
 }
 
-async function checkTodayStatus(silent = true) {
+async function checkTodayStatus(silent = true, forceFresh = false) {
   if (!currentUser) return;
   setAttendanceStatusLoading();
   try {
-    const res = await callAPI('get_history', { user_id: String(currentUser.id) }, silent);
+    // ถ้า forceFresh: ล้าง cache ก่อนเพื่อให้ได้ข้อมูลจริงจาก server เสมอ
+    if (forceFresh) {
+      invalidateClientCache('get_history');
+    }
+    const payload = { user_id: String(currentUser.id) };
+    // ส่ง force_fresh ไปที่ server ด้วยเพื่อให้ server ข้าม script cache
+    if (forceFresh) payload.force_fresh = true;
+    const res = await callAPI('get_history', payload, silent);
     if (!res.success) throw new Error(res.message || 'ไม่สามารถตรวจสอบสถานะการลงเวลาได้');
 
     const todayStr = getLocalDateKey();
@@ -1755,6 +1769,8 @@ async function submitAttendance(status) {
     selfie: photoToSend
   });
   if (res.success) {
+    // ล้าง history cache ทันทีเพื่อให้ checkTodayStatus ได้ข้อมูลสดจาก server
+    invalidateClientCache('get_history');
     Swal.fire({
       icon: 'success',
       title: 'บันทึกสำเร็จ',
@@ -1763,12 +1779,15 @@ async function submitAttendance(status) {
       showConfirmButton: false
     }).then(() => {
         retakePhoto();
-        checkTodayStatus();
+        // forceFresh=true: บังคับดึงสถานะใหม่จาก server ไม่ใช้ cache
+        checkTodayStatus(true, true);
         switchView('history');
     });
   } else {
     if (res.code === 'ATTENDANCE_STATUS_MISMATCH') {
-      await checkTodayStatus(true);
+      // Sync สถานะกับ server ทันที
+      invalidateClientCache('get_history');
+      await checkTodayStatus(true, true);
       return Swal.fire({
         icon: 'info',
         title: 'สถานะการลงเวลาเปลี่ยนแล้ว',
