@@ -371,7 +371,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.6";
+    const CURRENT_VERSION = "1.3.7";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {

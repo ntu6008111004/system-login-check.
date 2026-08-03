@@ -21,7 +21,7 @@ function logToSheet(action, type, data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.6";
+const APP_VERSION = "1.3.7";
 const SCHEMA_VERSION = "7";
 const CACHE_TTL = {
   master: 600,
