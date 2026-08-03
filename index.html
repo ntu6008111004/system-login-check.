@@ -36,9 +36,14 @@
     <div id="view-dashboard" class="hidden h-full flex flex-col">
         <div class="p-6 pt-10 pb-12 bg-corporate-900 text-white shadow-xl rounded-b-[3rem] relative z-20 overflow-hidden">
             <div class="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
-            <div class="flex items-center gap-5 relative z-10">
-                <img id="userAvatar" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="รูปโปรไฟล์ผู้ใช้งาน" class="w-16 h-16 rounded-2xl border-2 border-white/50 bg-white shadow-lg object-cover">
-                <div><h2 id="txtUserName" class="font-bold text-xl leading-tight">กำลังโหลดข้อมูล</h2><p id="txtUserCompany" class="text-blue-200 text-xs opacity-80 uppercase tracking-wider mt-1"></p></div>
+            <div class="flex justify-between items-start relative z-10">
+                <div class="flex items-center gap-5">
+                    <img id="userAvatar" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="รูปโปรไฟล์ผู้ใช้งาน" class="w-16 h-16 rounded-2xl border-2 border-white/50 bg-white shadow-lg object-cover">
+                    <div><h2 id="txtUserName" class="font-bold text-xl leading-tight">กำลังโหลดข้อมูล</h2><p id="txtUserCompany" class="text-blue-200 text-xs opacity-80 uppercase tracking-wider mt-1"></p></div>
+                </div>
+                <button onclick="forceRefreshDashboard()" class="text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-full w-10 h-10 flex items-center justify-center transition-all shadow-sm">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
             </div>
         </div>
         <div class="flex-1 overflow-y-auto p-5 pb-32 -mt-8 relative z-30 space-y-6">

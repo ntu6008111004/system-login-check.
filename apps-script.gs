@@ -874,13 +874,9 @@ function saveAttendance(p) {
   return { success: true };
 }
 
-function getUserHistory(userId, forceFresh) {
-  const cacheKey = "db_history_" + userId + "_v" + getDataVersion("attendance");
-  // ถ้า forceFresh = true ให้ไม่ใช้ cache ของ Script เพื่อแก้ปัญหาสถานะไม่อัปเดต
-  if (!forceFresh) {
-    const cached = getCachedJSON(cacheKey);
-    if (cached) return { success: true, history: cached, _cached: true };
-  }
+function getUserHistory(userId) {
+  // ⚠️ ไม่ใช้ cache สำหรับ history เพราะความถูกต้องของสถานะเข้างาน/ออกงาน
+  // สำคัญกว่าความเร็ว — ถ้า admin ลบข้อมูลจาก Sheet โดยตรง cache จะ stale
 
   const sheet =
     getSpreadsheet().getSheetByName("ATTENDANCE");
@@ -917,7 +913,6 @@ function getUserHistory(userId, forceFresh) {
     }
   }
 
-  setCachedJSON(cacheKey, history, CACHE_TTL.history);
   return { success: true, history };
 }
 

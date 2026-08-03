@@ -576,6 +576,46 @@ function invalidateClientCache(action) {
 
 // DELETED callAPIJsonp - Switching to POST-only approach
 
+// Auto-refresh when user returns to the app (fixes stale state if left in background)
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && currentView === 'dashboard') {
+        // If returning to dashboard, silently check status to ensure it's up to date
+        if (currentUser) {
+            checkTodayStatus(true, true);
+        }
+    }
+});
+
+/**
+ * 🔄 FORCE REFRESH DASHBOARD
+ * Called manually by user via refresh button on dashboard
+ */
+function forceRefreshDashboard() {
+    if (!currentUser) return;
+    
+    // Animate button for feedback
+    const btn = event.currentTarget.querySelector('i');
+    if (btn) btn.classList.add('fa-spin');
+    
+    // ล้าง Cache ของข้อมูลปัจจุบันทั้งหมด
+    invalidateClientCache('get_history');
+    
+    // ให้ checkTodayStatus ทำงานแบบแสดง UI (silent=false)
+    checkTodayStatus(false, true).then(() => {
+        if (btn) btn.classList.remove('fa-spin');
+        
+        Swal.fire({
+            icon: 'success',
+            title: 'รีเฟรชข้อมูลแล้ว',
+            text: 'สถานะการลงเวลาอัปเดตเป็นปัจจุบัน',
+            timer: 1500,
+            showConfirmButton: false,
+            toast: true,
+            position: 'top-end'
+        });
+    });
+}
+
 function initListeners() {
   $(document).on('submit', '#formLogin', handleLogin);
   $(document).on('click', '#btnCapture', capturePhoto);
