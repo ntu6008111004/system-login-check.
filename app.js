@@ -1206,11 +1206,11 @@ function switchView(viewName) {
     const isAdmin = currentUser && currentUser.role === 'admin';
     
     // Reset all
-    $('#navDashboard, #navHistory, #navAdmin, #navAdminDashboard, #navAdminHist').addClass('hidden').removeClass('active');
+    $('#navDashboard, #navHistory, #navAdmin').addClass('hidden').removeClass('active');
     
     if (isAdmin) {
         // Admins see Admin portal and History
-        $('#navAdmin, #navAdminDashboard, #navAdminHist, #navHistory').removeClass('hidden');
+        $('#navAdmin, #navHistory').removeClass('hidden');
         if (viewName === 'admin') $('#navAdmin').addClass('active');
         if (viewName === 'history') $('#navHistory').addClass('active');
     } else {

@@ -814,7 +814,13 @@ function saveAttendance(p) {
         newRow.push(locationName);
         break;
       case "selfie":
-        newRow.push(p.selfie_base64 || p.selfie || p.photo || "");
+        let photoData = String(p.selfie_base64 || p.selfie || p.photo || "");
+        if (photoData.length > 49000) {
+           // Google Sheets cell limit is 50,000 chars. Truncating might corrupt the image,
+           // but it prevents the entire script from crashing so attendance is saved.
+           photoData = photoData.substring(0, 49000);
+        }
+        newRow.push(photoData);
         break;
       case "device":
         newRow.push("Web");
