@@ -19,6 +19,54 @@ body {
   min-height: 100dvh;
 }
 
+/* Login has its own calm, full-page surface instead of the mobile-app frame. */
+body.login-page {
+  padding: 0;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(96, 165, 250, 0.20), transparent 32rem),
+    linear-gradient(155deg, #eaf1ff 0%, #f5f8ff 48%, #eef4ff 100%);
+}
+.login-page #main-content.login-shell {
+  width: 100%;
+  max-width: none;
+  min-height: 100dvh;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  overflow: visible;
+}
+.login-page .login-view {
+  min-height: 100dvh;
+  padding: clamp(1.5rem, 5vh, 3rem) 1.25rem;
+  background: transparent;
+}
+.login-page .login-card {
+  max-width: 390px;
+  padding: clamp(1.75rem, 5vw, 2.5rem);
+  border: 1px solid rgba(203, 213, 225, 0.78);
+  border-radius: 1.35rem;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 48px -28px rgba(30, 58, 138, 0.35), 0 10px 24px -18px rgba(15, 23, 42, 0.2);
+}
+.login-page .login-card .input-field,
+.login-page .login-card input[type="text"] {
+  border-radius: 0.85rem;
+  background: #f8fafc;
+}
+.login-page .login-card .btn-primary {
+  border-radius: 0.85rem;
+}
+.login-page .login-recovery {
+  border-top: 1px solid #e2e8f0;
+}
+
+@media (max-width: 420px) {
+  .login-page .login-view { padding: 1rem; }
+  .login-page .login-card { padding: 1.65rem 1.4rem; }
+}
+
 /* Container as a Floating Mobile Mockup */
 #main-content {
   max-width: 420px;

@@ -21,8 +21,8 @@ function logToSheet(action, type, data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.7";
-const SCHEMA_VERSION = "7";
+const APP_VERSION = "1.3.8";
+const SCHEMA_VERSION = "8";
 const CACHE_TTL = {
   master: 600,
   history: 120,
@@ -490,8 +490,6 @@ function setupDatabase() {
     branchesSheet.appendRow(["B001", "ยูดีทีสมายล์"]);
     branchesSheet.appendRow(["B002", "ทีสมายล์อุดรธานี (จินตคาม)"]);
     branchesSheet.appendRow(["B003", "ทีสมายล์นครสวรรค์"]);
-    branchesSheet.appendRow(["B004", "AEC"]);
-    branchesSheet.appendRow(["B005", "LTN"]);
   }
 
   let updatesSheet = ss.getSheetByName("APP_UPDATES");
@@ -509,19 +507,19 @@ function setupDatabase() {
 
   const updateRows = [
     [
-      "1.3.6",
+      APP_VERSION,
       "03/08/2026",
       "user",
-      "แก้ไขสถานะการลงเวลาและรูปภาพ",
-      "แก้ปัญหาบางเครื่องยังไม่เข้างานแต่แสดงว่าเข้าแล้ว|แก้ปัญหารูปภาพไม่แสดงสำหรับบางคน|ปรับปรุงการล้าง cache อัตโนมัติเมื่อมีการอัปเดต|สถานะการลงเวลาแม่นยำขึ้นทันทีหลังบันทึก",
+      "อัปเดตการเชื่อมต่อและสิทธิ์อุปกรณ์",
+      "เพิ่มปุ่มแก้ปัญหาเมื่อไฟล์ระบบค้าง|ล้างข้อมูลชั่วคราวโดยไม่ออกจากระบบ|แนะนำการอนุญาตกล้องและตำแหน่งให้เข้าใจง่ายขึ้น",
       true,
     ],
     [
-      "1.3.6",
+      APP_VERSION,
       "03/08/2026",
       "admin",
-      "แก้ไข Cache และสถานะการลงเวลา",
-      "แก้ปัญหาสถานะเข้างานไม่อัปเดตบางเครื่อง|แก้ปัญหารูปเซลฟี่ไม่แสดงในบางกรณี|เพิ่ม force-fresh สำหรับตรวจสอบสถานะแบบ Real-time|ปรับปรุง cache invalidation ทุก layer",
+      "อัปเดตข้อมูลระบบและสาขา",
+      "ดึงรายชื่อสาขาจาก Google Sheet เท่านั้น|เพิ่มเครื่องมือกู้ cache สำหรับผู้ใช้งาน|ปรับปรุงคำแนะนำสิทธิ์กล้องและ GPS",
       true,
     ],
   ];

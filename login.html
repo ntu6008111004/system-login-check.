@@ -15,26 +15,26 @@
   <script defer src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
-  <link rel="stylesheet" href="tailwind.min.css?v=20260801-9">
-  <link rel="stylesheet" href="style.css?v=20260801-9">
+  <link rel="stylesheet" href="tailwind.min.css?v=20260803-8">
+  <link rel="stylesheet" href="style.css?v=20260803-8">
 </head>
-<body class="bg-corporate-50 min-h-screen text-slate-800 antialiased font-sans">
+<body class="login-page min-h-screen text-slate-800 antialiased font-sans">
 
   <div id="loading-overlay" class="loading-overlay">
     <div class="loader-spinner"></div>
     <p class="mt-4 font-bold text-corporate-900 tracking-wide">กำลังเข้าสู่ระบบ...</p>
   </div>
 
-  <div id="main-content" class="max-w-md mx-auto relative min-h-screen bg-white shadow-xl overflow-hidden flex flex-col justify-center">
+  <div id="main-content" class="login-shell relative min-h-screen overflow-hidden flex flex-col justify-center">
     
     <!-- Login View -->
-    <div id="view-login" class="h-full flex flex-col p-8 justify-center items-center bg-gradient-to-br from-corporate-50 to-white">
-        <div class="w-full max-w-sm premium-card p-8 text-center animate-in fade-in slide-in-from-bottom-10 duration-700">
-            <div class="mb-8 relative inline-block">
-                <img src="favicon.svg" alt="WorkLogs Attendance" class="w-24 h-24 rounded-[2rem] mx-auto shadow-2xl shadow-blue-200">
+    <div id="view-login" class="login-view h-full flex flex-col justify-center items-center">
+        <div class="login-card w-full text-center animate-in fade-in slide-in-from-bottom-10 duration-700">
+            <div class="mb-6 relative inline-block">
+                <img src="favicon.svg" alt="WorkLogs Attendance" class="w-20 h-20 rounded-2xl mx-auto shadow-xl shadow-blue-200">
             </div>
-            <h1 class="text-3xl font-extrabold text-corporate-900 mb-2 tracking-tight">WorkLogs Attendance</h1>
-            <p class="text-slate-400 text-sm mb-10 font-medium">ระบบลงเวลาปฏิบัติงานอัจฉริยะ</p>
+            <h1 class="text-2xl font-extrabold text-corporate-900 mb-2 tracking-tight">WorkLogs Attendance</h1>
+            <p class="text-slate-500 text-sm mb-8 font-medium">ระบบลงเวลาปฏิบัติงาน</p>
             
             <form id="formLogin" class="space-y-5 text-left">
                 <div class="space-y-4">
@@ -55,15 +55,18 @@
                     </div>
                     <!-- <a href="#" class="text-xs font-bold text-blue-600">ลืมรหัสผ่าน?</a> -->
                 </div>
-                <button type="submit" class="btn-primary mt-8 py-4 text-lg">เข้าสู่ระบบ <i class="fas fa-chevron-right ml-2 text-sm"></i></button>
+                <button type="submit" class="btn-primary mt-7 py-3.5 text-base">เข้าสู่ระบบ <i class="fas fa-chevron-right ml-2 text-sm"></i></button>
             </form>
-            <div class="mt-12 flex items-center justify-center gap-2">
-                <span class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
+            <div class="login-recovery mt-7 pt-5">
+                <button type="button" onclick="forceAppRecovery()" class="text-sm font-bold text-blue-700 hover:text-blue-900 underline underline-offset-4">
+                    เข้าระบบไม่ได้ หรือหน้าจอไม่อัปเดต?
+                </button>
+                <p class="mt-2 text-xs leading-5 text-slate-500">กดเพื่อล้างข้อมูลชั่วคราวและเปิดระบบใหม่ โดยไม่ลบบัญชีที่จดจำไว้</p>
             </div>
         </div>
     </div>
   </div>
 
-  <script defer src="app.js?v=20260803-7"></script>
+  <script defer src="app.js?v=20260803-8"></script>
 </body>
 </html>

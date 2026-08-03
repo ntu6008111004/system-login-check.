@@ -1,4 +1,4 @@
-// Web App deployment v57 (03/08/2026). Keep this in sync when a new deployment URL is created.
+// Web App deployment v58 (03/08/2026). Keep this in sync when a new deployment URL is created.
 const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5cU9WYWZyZnBqcWlqYkR4NDFPTUpXVUZ6TWNjaGpnSGJOUjF5SUp1RENGWjVaUnBNVmczZS1WZ05zcVpBZXFaVGsvZXhlYw==';
 const API_URL = atob(_u);
 
@@ -19,6 +19,7 @@ let hasCheckedInToday = false;
 let hasCheckedOutToday = false;
 let isAttendanceStatusResolved = false;
 let allBranches = [];
+let devicePermissionAlertVisible = false;
 
 // AI State
 let faceDetection = null;
@@ -371,7 +372,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.7";
+    const CURRENT_VERSION = "1.3.8";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -387,9 +388,11 @@ async function checkAppVersion() {
                 // ป้องกัน reload loop: ตรวจว่าเราเพิ่ง reload มาจาก version check นี้แล้วหรือยัง
                 const alreadyReloaded = new URLSearchParams(window.location.search).get('_v');
                 if (alreadyReloaded) {
-                    // ถ้าเพิ่ง reload มาแล้วแต่ version ยังไม่ตรง แสดงว่า deploy ยังไม่ update
-                    // แค่ล้าง cache แล้วรอ user refresh เอง
+                    // The browser still has an old file after an automatic retry.
+                    // Give the user one clear, safe recovery action instead of
+                    // leaving them to repeatedly refresh without a result.
                     clearInternalCache();
+                    window.setTimeout(() => showVersionRecovery(serverVersion), 250);
                     return;
                 }
 
@@ -406,16 +409,40 @@ async function checkAppVersion() {
     }
 }
 
-function clearInternalCache() {
-    memoryCache.clear();
-    adminBaseDataset = { key: '', records: [], complete: false };
-    // ล้าง cache ทุกประเภท: ข้อมูล (cache_), ประวัติ (db_history_), และรูป (attendance_photo_)
-    Object.keys(localStorage).forEach(key => { 
-        if (key.startsWith('cache_') ||
-            key.startsWith('db_history_') ||
-            key.startsWith('attendance_photo_')) {
-            localStorage.removeItem(key);
+async function forceAppRecovery() {
+    clearInternalCache();
+    localStorage.removeItem('worklogs_app_version');
+    sessionStorage.removeItem('worklogs_version_recovery');
+    try {
+        if ('caches' in window) {
+            const keys = await window.caches.keys();
+            await Promise.all(keys.map(key => window.caches.delete(key)));
         }
+    } catch (error) {
+        console.warn('Unable to clear browser cache storage:', error);
+    }
+
+    const url = new URL(window.location.href);
+    url.searchParams.set('reset', Date.now().toString());
+    url.searchParams.delete('_v');
+    url.searchParams.delete('_t');
+    window.location.replace(url.toString());
+}
+
+function showVersionRecovery(serverVersion = '') {
+    if (sessionStorage.getItem('worklogs_version_recovery') === 'shown') return;
+    sessionStorage.setItem('worklogs_version_recovery', 'shown');
+    Swal.fire({
+        icon: 'info',
+        title: 'พบไฟล์ระบบเวอร์ชันเก่า',
+        html: `<p class="text-left text-sm leading-6">ระบบเพิ่งอัปเดต แต่เบราว์เซอร์ยังเก็บไฟล์เดิมอยู่<br>กดปุ่มด้านล่างเพื่อล้างข้อมูลชั่วคราวและเปิดระบบใหม่ <b>โดยไม่ออกจากระบบ</b></p>${serverVersion ? `<p class="mt-2 text-xs text-slate-500">เวอร์ชันล่าสุด ${escapeHTML(serverVersion)}</p>` : ''}`,
+        showCancelButton: true,
+        confirmButtonText: 'แก้ปัญหาและเปิดใหม่',
+        cancelButtonText: 'ภายหลัง',
+        confirmButtonColor: '#1d4ed8',
+        allowOutsideClick: false,
+    }).then(result => {
+        if (result.isConfirmed) forceAppRecovery();
     });
 }
 
@@ -576,8 +603,9 @@ function invalidateClientCache(action) {
 
 function clearInternalCache() {
   memoryCache.clear();
+  adminBaseDataset = { key: '', records: [], complete: false };
   Object.keys(localStorage).forEach(key => {
-    if (key.startsWith('cache_') || key.startsWith('db_') || key.startsWith('attendance_')) {
+    if (key.startsWith('cache_') || key.startsWith('db_') || key.startsWith('attendance_') || key.startsWith('worklogs_update_seen_')) {
       localStorage.removeItem(key);
     }
   });
@@ -1380,10 +1408,39 @@ function initMapAndGPS() {
       resolveCurrentLocationName(currentCoords.lat, currentCoords.lng);
       checkButtonStatus();
     }, err => {
-      setLocationNameStatus('ไม่สามารถอ่านตำแหน่งได้', 'error');
-      Swal.fire('Error', 'กรุณาเปิด GPS', 'error');
+      const blocked = err && err.code === 1;
+      $('#gpsStatusBadge').removeClass('bg-yellow-100 animate-pulse').addClass('bg-rose-100 text-rose-700').text(blocked ? 'ต้องอนุญาตตำแหน่ง' : 'ยังไม่พบตำแหน่ง');
+      setLocationNameStatus(blocked ? 'ตำแหน่งถูกบล็อก — แตะ “แก้ปัญหากล้อง/GPS” ด้านบน' : 'ยังไม่สามารถอ่านตำแหน่งได้ ลองใหม่อีกครั้ง', 'error');
+      if (blocked) showDevicePermissionHelp({ location: true });
     }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
   }
+}
+
+function showDevicePermissionHelp({ camera = false, location = false } = {}) {
+  if (devicePermissionAlertVisible) return;
+  devicePermissionAlertVisible = true;
+  const needed = [camera && 'กล้อง', location && 'ตำแหน่ง GPS'].filter(Boolean).join(' และ ') || 'กล้องและตำแหน่ง GPS';
+  Swal.fire({
+    icon: 'warning',
+    title: 'ต้องอนุญาต ' + needed,
+    html: `
+      <div class="text-left text-sm leading-6 space-y-3">
+        <p>ระบบยังไม่ได้รับสิทธิ์ใช้งาน จึงยังลงเวลาไม่ได้</p>
+        <ol class="list-decimal pl-5 space-y-1 text-slate-600">
+          <li>กดปุ่ม <b>ตรวจสิทธิ์และลองใหม่</b> ด้านล่าง</li>
+          <li>เมื่อเบราว์เซอร์ถาม ให้กด <b>อนุญาต</b></li>
+          <li>หากเคยกดบล็อก ให้แตะไอคอน <b>🔒</b> ข้างชื่อเว็บ แล้วตั้งค่า Camera และ Location เป็น <b>อนุญาต</b></li>
+        </ol>
+      </div>`,
+    showCancelButton: true,
+    confirmButtonText: 'ตรวจสิทธิ์และลองใหม่',
+    cancelButtonText: 'ภายหลัง',
+    confirmButtonColor: '#1d4ed8',
+    allowOutsideClick: true,
+  }).then(result => {
+    devicePermissionAlertVisible = false;
+    if (result.isConfirmed) requestPermissionsManual();
+  });
 }
 
 function setLocationNameStatus(message, state = 'loading') {
@@ -1486,14 +1543,18 @@ async function startCamera() {
     if (e.name === 'NotReadableError') msg = 'กล้องกำลังถูกใช้งานโดยแอปอื่น กรุณาปิดแอปที่ใช้กล้องหรือรีเฟรชเบราว์เซอร์';
     if (e.name === 'NotFoundError') msg = 'ไม่พบกล้องที่พร้อมใช้งาน กรุณาตรวจสอบการเชื่อมต่อกล้อง';
     if (e.message === 'Camera preview timeout') msg = 'เปิดกล้องได้แต่ภาพยังไม่พร้อม กรุณากดขอสิทธิ์กล้อง/GPS เพื่อลองใหม่';
-    Swal.fire({
-      icon: 'error',
-      title: 'เปิดกล้องไม่สำเร็จ',
-      text: msg,
-      showCloseButton: true,
-      allowOutsideClick: true,
-      confirmButtonText: 'รับทราบ'
-    });
+    if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+      showDevicePermissionHelp({ camera: true });
+    } else {
+      Swal.fire({
+        icon: 'error',
+        title: 'เปิดกล้องไม่สำเร็จ',
+        text: msg,
+        showCloseButton: true,
+        allowOutsideClick: true,
+        confirmButtonText: 'รับทราบ'
+      });
+    }
     return false;
   }
 }
@@ -2325,9 +2386,10 @@ function getAttendanceDateKey(value) {
 }
 
 function applyBranches(branches) {
-  allBranches = [...branches];
-  if (!allBranches.find(b => b.name === 'AEC')) allBranches.push({id: 'B004', name: 'AEC'});
-  if (!allBranches.find(b => b.name === 'LTN')) allBranches.push({id: 'B005', name: 'LTN'});
+  // Branches must come only from the BRANCHES sheet. Do not silently add
+  // fallback companies in the browser; that makes the web app disagree with
+  // the administrator's master data.
+  allBranches = Array.isArray(branches) ? [...branches] : [];
   updateBranchFilters();
 }
 
