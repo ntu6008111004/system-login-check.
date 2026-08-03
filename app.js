@@ -507,6 +507,8 @@ async function showUpdateNotice(update) {
   if (result.isConfirmed) localStorage.setItem(seenKey, '1');
 }
 
+const memoryCache = new Map();
+
 const CACHE_TTL_MS = {
   get_branches: 10 * 60 * 1000,
   get_users: 10 * 60 * 1000,
@@ -569,17 +571,23 @@ function getCache(action, payload = {}, allowStale = true) {
 }
 
 function invalidateClientCache(action) {
-  const prefixes = [`cache_v2_${action}_`, `cache_v3_${action}_`];
+  const prefixes = [`cache_v2_${action}_`, `cache_v3_${action}_`, `db_history_` + currentUser?.id];
   [...memoryCache.keys()].filter(key => prefixes.some(prefix => key.startsWith(prefix))).forEach(key => memoryCache.delete(key));
   Object.keys(localStorage).filter(key => prefixes.some(prefix => key.startsWith(prefix))).forEach(key => localStorage.removeItem(key));
 }
 
-// DELETED callAPIJsonp - Switching to POST-only approach
+function clearInternalCache() {
+  memoryCache.clear();
+  Object.keys(localStorage).forEach(key => {
+    if (key.startsWith('cache_') || key.startsWith('db_') || key.startsWith('attendance_')) {
+      localStorage.removeItem(key);
+    }
+  });
+}
 
 // Auto-refresh when user returns to the app (fixes stale state if left in background)
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && currentView === 'dashboard') {
-        // If returning to dashboard, silently check status to ensure it's up to date
         if (currentUser) {
             checkTodayStatus(true, true);
         }
@@ -600,22 +608,32 @@ function forceRefreshDashboard(btnElement) {
         if (btnIcon) btnIcon.classList.add('fa-spin');
     }
     
-    // ล้าง Cache ของข้อมูลปัจจุบันทั้งหมด
+    // 1. ตั้งข้อความบน Loading Overlay ให้ถูกต้อง (ไม่ขึ้น "กำลังบันทึกข้อมูล")
+    $('#loading-overlay p').text('กำลังอัปเดตข้อมูลล่าสุด...');
+    
+    // 2. ล้าง Cache ทั้งหมดทันที
+    clearInternalCache();
     invalidateClientCache('get_history');
     
-    // ให้ checkTodayStatus ทำงานแบบแสดง UI (silent=false)
+    // 3. ดึงข้อมูลสดจาก Server (forceFresh = true)
     checkTodayStatus(false, true).then(() => {
         if (btnIcon) btnIcon.classList.remove('fa-spin');
         
+        // คืนค่าข้อความตั้งต้นสำหรับ Loading Overlay
+        $('#loading-overlay p').text('กำลังประมวลผล...');
+        
         Swal.fire({
             icon: 'success',
-            title: 'รีเฟรชข้อมูลแล้ว',
-            text: 'สถานะการลงเวลาอัปเดตเป็นปัจจุบัน',
+            title: 'รีเฟรชข้อมูลสำเร็จ',
+            text: 'ดึงข้อมูลสดจากหลังบ้านเรียบร้อยแล้วค่ะ',
             timer: 1500,
             showConfirmButton: false,
             toast: true,
             position: 'top-end'
         });
+    }).catch(() => {
+        if (btnIcon) btnIcon.classList.remove('fa-spin');
+        $('#loading-overlay p').text('กำลังประมวลผล...');
     });
 }
 
