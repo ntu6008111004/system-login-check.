@@ -1518,8 +1518,9 @@ async function setupDashboard() {
   $('#btnCapture').removeClass('hidden').html('<i class="fas fa-camera"></i> ถ่ายรูปเซลฟี่').prop('disabled', true).addClass('opacity-50');
 
   setAttendanceStatusLoading();
-  // Force fresh เสมอเพื่อป้องกันสถานะไม่ตรง
-  const statusPromise = checkTodayStatus(false, true);
+  // Use stale-while-revalidate status check to preserve client cache
+  const statusPromise = checkTodayStatus(false, false);
+  prefetchUserHistory();
   initMapAndGPS();
   const cameraPromise = startCamera();
 
@@ -2175,27 +2176,56 @@ function resetDashboardState() {
 }
 
 
+function prefetchUserHistory() {
+  if (!currentUser || currentUser.role === 'admin') return;
+  loadHistory(false).catch(err => console.warn('[PREFETCH] history prefetch notice:', err));
+}
+
 async function loadHistory(force = false) {
+  const clickAt = Date.now();
   const payload = { user_id: currentUser.id };
   const requestId = ++historyLoadSequence;
   const cached = force ? null : getCache('get_history', payload);
+
+  console.log(`[HISTORY] click_at=${clickAt}`);
+
   if (cached) {
-    personalHistoryData = cached.history;
+    personalHistoryData = cached.history || [];
     renderHistoryFiltered();
     setHistoryLoading(true, 'กำลังตรวจสอบประวัติล่าสุด...');
+    console.log(`[HISTORY] cache_hit=true render_finished_at=${Date.now()} total_ms=${Date.now() - clickAt}`);
   } else {
     renderHistorySkeleton();
     setHistoryLoading(true, 'กำลังดึงประวัติการลงเวลา...');
   }
 
-  const res = await callAPI('get_history', payload, !!cached);
-  if (requestId !== historyLoadSequence) return res;
-  if (res.success) {
-    personalHistoryData = res.history;
-    renderHistoryFiltered();
+  const reqStartedAt = Date.now();
+  console.log(`[HISTORY] request_started_at=${reqStartedAt} queued_ms=${reqStartedAt - clickAt}`);
+
+  try {
+    const res = await callAPI('get_history', payload, !!cached);
+    const respReceivedAt = Date.now();
+    const networkMs = respReceivedAt - reqStartedAt;
+
+    if (requestId !== historyLoadSequence) return res;
+
+    if (res && res.success) {
+      personalHistoryData = res.history || [];
+      const renderStart = Date.now();
+      renderHistoryFiltered();
+      const renderFinishedAt = Date.now();
+      const renderMs = renderFinishedAt - renderStart;
+      const totalMs = renderFinishedAt - clickAt;
+
+      console.log(`[HISTORY] response_received_at=${respReceivedAt} render_finished_at=${renderFinishedAt} cache_hit=${!!cached} force_fresh=${force} queued_ms=${reqStartedAt - clickAt} network_ms=${networkMs} render_ms=${renderMs} total_ms=${totalMs}`);
+    }
+    setHistoryLoading(false);
+    return res;
+  } catch (err) {
+    console.error('[HISTORY] error loading history:', err);
+    setHistoryLoading(false);
+    return { success: false, history: personalHistoryData };
   }
-  setHistoryLoading(false);
-  return res;
 }
 
 function setHistoryLoading(isLoading, message = '') {
