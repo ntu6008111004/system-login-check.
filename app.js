@@ -25,19 +25,71 @@ let devicePermissionAlertVisible = false;
 let faceDetection = null;
 let activeLoadings = 0; // Global counter for async tasks
 const DETECTION_INTERVAL = 200; // ms (Target 5-6 FPS for mobile stability)
+
 /**
- * 🎨 UI COMPONENTS
+ * 🎨 UI COMPONENTS & SAFE LOADING TOKEN MANAGER
  */
+const activeLoadingTokens = new Set();
+const loadingTokenTimers = new Map();
+
+function acquireLoadingToken(tokenId) {
+  if (!tokenId) tokenId = 'gen_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+  activeLoadingTokens.add(tokenId);
+  console.log(`[LOADING] token acquired: ${tokenId} (total: ${activeLoadingTokens.size})`);
+  
+  if (loadingTokenTimers.has(tokenId)) clearTimeout(loadingTokenTimers.get(tokenId));
+  const timerId = window.setTimeout(() => {
+    console.warn(`[LOADING] token safety timeout reached, auto-releasing: ${tokenId}`);
+    releaseLoadingToken(tokenId);
+  }, 20000);
+  loadingTokenTimers.set(tokenId, timerId);
+
+  $('#loading-overlay').css('display', 'flex').show();
+  return tokenId;
+}
+
+function releaseLoadingToken(tokenId) {
+  if (!tokenId) return;
+  if (loadingTokenTimers.has(tokenId)) {
+    clearTimeout(loadingTokenTimers.get(tokenId));
+    loadingTokenTimers.delete(tokenId);
+  }
+  activeLoadingTokens.delete(tokenId);
+  console.log(`[LOADING] token released: ${tokenId} (total: ${activeLoadingTokens.size})`);
+  if (activeLoadingTokens.size <= 0) {
+    activeLoadingTokens.clear();
+    $('#loading-overlay').hide();
+  }
+}
+
+function clearAllLoadingTokens() {
+  console.log('[LOADING] clearing all active loading tokens');
+  loadingTokenTimers.forEach(timerId => clearTimeout(timerId));
+  loadingTokenTimers.clear();
+  activeLoadingTokens.clear();
+  $('#loading-overlay').hide();
+}
+
+// Preview/Test Hook (Active ONLY on localhost / 127.0.0.1 - READ-ONLY)
+if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+  window.__WORKLOGS_TEST__ = {
+    getLoginState: function () {
+      return {
+        isLoginSubmitting: isLoginSubmitting,
+        currentLoginAttemptId: currentLoginAttemptId
+      };
+    },
+    getActiveLoadingTokens: function () {
+      return Array.from(activeLoadingTokens);
+    }
+  };
+}
+
 function showLoading(show) {
   if (show) {
-    activeLoadings++;
-    if (activeLoadings === 1) $('#loading-overlay').css('display', 'flex').show();
+    acquireLoadingToken('legacy_task');
   } else {
-    activeLoadings--;
-    if (activeLoadings <= 0) {
-      activeLoadings = 0;
-      $('#loading-overlay').hide();
-    }
+    releaseLoadingToken('legacy_task');
   }
 }
 let isFaceInFrame = false;
@@ -338,36 +390,45 @@ function initApp() {
   const savedUser = localStorage.getItem('worklogs_user');
   
   if (savedUser) {
-    currentUser = JSON.parse(savedUser);
+    try {
+      currentUser = JSON.parse(savedUser);
+    } catch (e) {
+      currentUser = null;
+      localStorage.removeItem('worklogs_user');
+    }
+  }
+
+  if (currentUser) {
     if (currentUser.profile) {
       currentUser.profile = '';
       localStorage.setItem('worklogs_user', JSON.stringify(currentUser));
     }
     if (isLoginPage) {
-        window.location.href = 'index.html';
-        return;
+      window.location.href = 'index.html';
+      return;
     }
     $('#chkRemember').prop('checked', true);
-    // Admin users go directly to admin view, regular users go to dashboard
+
+    // Render UI immediately
     if (currentUser.role === 'admin') {
-        loadBranches(); // Proactive load
-        loadUsers();    // Proactive load
-        switchView('admin');
+      switchView('admin');
     } else {
-        switchView('dashboard');
+      switchView('dashboard');
     }
+
+    // Non-blocking background priority queue
+    window.setTimeout(() => {
+      console.log('[STARTUP] Running non-critical background checks');
+      Promise.allSettled([
+        checkAppVersion().catch(err => console.warn('[STARTUP] checkAppVersion error ignored:', err)),
+        checkUpdateNotice().catch(err => console.warn('[STARTUP] checkUpdateNotice error ignored:', err))
+      ]);
+    }, 1200);
   } else {
     if (!isLoginPage) {
-        window.location.href = 'login.html';
-        return;
+      window.location.href = 'login.html';
+      return;
     }
-    // We are on login.html and no user, stay here.
-  }
-
-  // Version Control: Check for updates on Every Refresh
-  checkAppVersion();
-  if (currentUser && !isLoginPage) {
-    window.setTimeout(checkUpdateNotice, 450);
   }
 }
 
@@ -1279,40 +1340,124 @@ function switchView(viewName) {
 
 
 /**
- * 🔐 AUTH
+ * 🔐 AUTHENTICATION & LOGIN STATE MACHINE
  */
-async function handleLogin(e) {
-  e.preventDefault();
-  const username = $('#username').val();
-  const rawPassword = $('#password').val();
-  const password = await hashPassword(rawPassword);
-  const remember = $('#chkRemember').is(':checked');
-  const res = await callAPI('login', { username, password });
-  if (res.success) {
-    currentUser = res.user;
-    if (remember) localStorage.setItem('worklogs_user', JSON.stringify(res.user));
-    
-    // Clear cache on login to ensure fresh data for new session
-    Object.keys(localStorage).forEach(key => { if(key.startsWith('cache_')) localStorage.removeItem(key); });
-    
-    // Proactive loading for admin
-    if (res.user.role === 'admin') {
-        loadBranches(); // Fetch master data early
-        loadUsers();    // Fetch users early
-    }
-    
-    Swal.fire({ 
-        icon: 'success', 
-        title: 'สวัสดีคุณ ' + res.user.name, 
-        timer: 650,
-        showConfirmButton: false,
-        background: 'rgba(255, 255, 255, 0.95)',
-        backdrop: 'rgba(30, 58, 138, 0.2) blur(10px)'
-    }).then(() => {
-        window.location.href = 'index.html';
-    });
+let currentLoginAttemptId = null;
+let currentLoginAbortController = null;
+let isLoginSubmitting = false;
+
+function resetLoginFormState() {
+  isLoginSubmitting = false;
+  const submitBtn = $('#btnLoginSubmit');
+  if (submitBtn.length) {
+    submitBtn.prop('disabled', false).removeClass('opacity-70 cursor-not-allowed')
+             .html('เข้าสู่ระบบ <i class="fas fa-chevron-right ml-2 text-sm"></i>');
+  }
+  $('#loginErrorMessage').addClass('hidden');
+  $('#loginErrorText').text('');
+}
+
+function showLoginError(message) {
+  resetLoginFormState();
+  const errorBox = $('#loginErrorMessage');
+  const errorText = $('#loginErrorText');
+  if (errorBox.length && errorText.length) {
+    errorText.text(message || 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง');
+    errorBox.removeClass('hidden');
   } else {
-    Swal.fire('ล้มเหลว', res.message, 'error');
+    Swal.fire({
+      icon: 'error',
+      title: 'เข้าสู่ระบบไม่สำเร็จ',
+      text: message || 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง',
+      confirmButtonText: 'ลองใหม่',
+      confirmButtonColor: '#1d4ed8'
+    });
+  }
+}
+
+async function handleLogin(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  
+  if (isLoginSubmitting) {
+    console.warn('[LOGIN] Submit ignored: already in progress');
+    return;
+  }
+
+  $('#loginErrorMessage').addClass('hidden');
+  const username = String($('#username').val() || '').trim();
+  const rawPassword = String($('#password').val() || '').trim();
+
+  if (!username || !rawPassword) {
+    showLoginError('กรุณากรอกชื่อผู้ใช้งานและรหัสผ่าน');
+    return;
+  }
+
+  isLoginSubmitting = true;
+  const submitBtn = $('#btnLoginSubmit');
+  if (submitBtn.length) {
+    submitBtn.prop('disabled', true).addClass('opacity-70 cursor-not-allowed')
+             .html('<i class="fas fa-circle-notch fa-spin mr-2"></i> กำลังเข้าสู่ระบบ...');
+  }
+
+  const attemptId = 'login_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+  currentLoginAttemptId = attemptId;
+
+  if (currentLoginAbortController) {
+    console.log('[LOGIN] Aborting previous login attempt');
+    try { currentLoginAbortController.abort(); } catch (err) {}
+  }
+  currentLoginAbortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+
+  const loadingToken = 'login:' + attemptId;
+  acquireLoadingToken(loadingToken);
+  const loginStartTime = Date.now();
+  console.log(`[LOGIN] attempt started (${attemptId}) for user: ${username.slice(0, 3)}***`);
+
+  try {
+    const password = await hashPassword(rawPassword);
+    const remember = $('#chkRemember').is(':checked');
+
+    const res = await callAPI('login', {
+      username,
+      password,
+      login_attempt_id: attemptId,
+      request_id: 'req_' + attemptId
+    });
+
+    const totalDuration = Date.now() - loginStartTime;
+
+    // Guard: Check if superseded by another attempt
+    if (attemptId !== currentLoginAttemptId) {
+      console.warn(`[LOGIN] response ignored because superseded (${attemptId}) duration: ${totalDuration}ms`);
+      return;
+    }
+
+    if (res && res.success) {
+      console.log(`[LOGIN] login successful (${attemptId}) duration: ${totalDuration}ms`);
+      currentUser = res.user;
+      if (remember) localStorage.setItem('worklogs_user', JSON.stringify(res.user));
+      
+      // Clear client cache for fresh session
+      clearInternalCache();
+
+      releaseLoadingToken(loadingToken);
+      resetLoginFormState();
+      
+      // Navigate immediately without blocking UI
+      window.location.href = 'index.html';
+    } else {
+      const errorMsg = res?.message || 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง';
+      console.warn(`[LOGIN] login failed (${attemptId}): ${errorMsg} code: ${res?.code || 'UNKNOWN'}`);
+      showLoginError(errorMsg);
+    }
+  } catch (error) {
+    if (attemptId === currentLoginAttemptId) {
+      const totalDuration = Date.now() - loginStartTime;
+      console.error(`[LOGIN] login exception (${attemptId}): ${error.message} duration: ${totalDuration}ms`);
+      showLoginError(error?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้ง');
+    }
+  } finally {
+    releaseLoadingToken(loadingToken);
   }
 }
 
@@ -2362,27 +2507,6 @@ async function loadBranches(force = false) {
     console.error('Error loading branches:', err);
     return { success: false, branches: allBranches };
   }
-}
-
-function getLocalDateKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-// Attendance records are returned as "DD/MM/YYYY HH:mm:ss" by Apps Script.
-// Normalize that format before comparing it with today's local date.
-function getAttendanceDateKey(value) {
-  const dateText = String(value || '').trim();
-  const thaiDate = dateText.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (thaiDate) {
-    const [, day, month, year] = thaiDate;
-    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-  }
-
-  const isoDate = dateText.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return isoDate ? isoDate[0] : '';
 }
 
 function applyBranches(branches) {
