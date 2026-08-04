@@ -21,7 +21,7 @@ function logToSheet(action, type, data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.8";
+const APP_VERSION = "1.3.9";
 const SCHEMA_VERSION = "8";
 const CACHE_TTL = {
   master: 600,
@@ -129,24 +129,35 @@ function doPost(e) {
 }
 
 function handleAction(action, data) {
-  if (action === "login") return loginUser(data.username, data.password);
-  if (action === "save_attendance") return saveAttendance(data);
-  if (action === "get_history") return getUserHistory(data.user_id, data.force_fresh);
-  if (action === "get_admin_data") return getAllAttendance(data || {});
-  if (action === "get_attendance_photo") return getAttendancePhoto(data.id || data.attendance_id);
-  if (action === "get_users") return getUsers();
-  if (action === "get_user_profile") return getUserProfile(data.id || data.user_id);
-  if (action === "create_user") return createUser(data);
-  if (action === "delete_user") return deleteUser(data.user_id || data.id);
-  if (action === "update_user") return updateUser(data);
-  if (action === "generate_mock_data") return generateMockData();
-  if (action === "get_branches") return getBranches();
-  if (action === "get_version") return { success: true, version: APP_VERSION };
-  if (action === "get_update_notice") return getUpdateNotice(data.role || "user");
-  if (action === "reverse_geocode") return reverseGeocodeLocation(data.latitude, data.longitude);
-  if (action === "reset_all_passwords") return resetAllPasswords();
+  const startTime = Date.now();
+  data = data || {};
+  let result;
+  if (action === "login") result = loginUser(data.username, data.password, data);
+  else if (action === "save_attendance") result = saveAttendance(data);
+  else if (action === "get_history") result = getUserHistory(data.user_id, data.force_fresh);
+  else if (action === "get_admin_data") result = getAllAttendance(data || {});
+  else if (action === "get_attendance_photo") result = getAttendancePhoto(data.id || data.attendance_id);
+  else if (action === "get_users") result = getUsers();
+  else if (action === "get_user_profile") result = getUserProfile(data.id || data.user_id);
+  else if (action === "create_user") result = createUser(data);
+  else if (action === "delete_user") result = deleteUser(data.user_id || data.id);
+  else if (action === "update_user") result = updateUser(data);
+  else if (action === "generate_mock_data") result = generateMockData();
+  else if (action === "get_branches") result = getBranches();
+  else if (action === "get_version") result = { success: true, version: APP_VERSION };
+  else if (action === "get_update_notice") result = getUpdateNotice(data.role || "user");
+  else if (action === "reverse_geocode") result = reverseGeocodeLocation(data.latitude, data.longitude);
+  else if (action === "reset_all_passwords") result = resetAllPasswords();
+  else result = { success: false, code: "UNKNOWN_ACTION", message: "Unknown action: " + action };
 
-  return { success: false, message: "Unknown action: " + action };
+  if (result && typeof result === "object") {
+    result.backend_version = APP_VERSION;
+    result.server_ms = Date.now() - startTime;
+    if (data.request_id || data.requestId) {
+      result.request_id = data.request_id || data.requestId;
+    }
+  }
+  return result;
 }
 
 function generateMockData() {
@@ -584,16 +595,16 @@ function getBranches() {
   return { success: true, branches: branches };
 }
 
-function loginUser(username, password) {
+function loginUser(username, password, data) {
   const searchUser = String(username || "").trim().toLowerCase();
   const inputEncoded = String(password || "").trim();
   if (!searchUser || !inputEncoded) {
-    return { success: false, message: "กรุณากรอกชื่อผู้ใช้งานและรหัสผ่าน" };
+    return { success: false, code: "INVALID_INPUT", message: "กรุณากรอกชื่อผู้ใช้งานและรหัสผ่าน" };
   }
 
   const sheet = getSpreadsheet().getSheetByName("USERS");
   if (!sheet || sheet.getLastRow() < 2) {
-    return { success: false, message: "ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง" };
+    return { success: false, code: "INVALID_CREDENTIALS", message: "ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง" };
   }
 
   const headers = getHeaders(sheet);
@@ -612,7 +623,7 @@ function loginUser(username, password) {
   }
 
   if (!rowNumber) {
-    return { success: false, message: "ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง" };
+    return { success: false, code: "INVALID_CREDENTIALS", message: "ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง" };
   }
 
   const row = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
@@ -636,6 +647,7 @@ function loginUser(username, password) {
 
   return {
     success: false,
+    code: "INVALID_CREDENTIALS",
     message: "ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง",
   };
 }
