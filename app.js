@@ -19,6 +19,7 @@ let hasCheckedInToday = false;
 let hasCheckedOutToday = false;
 let isAttendanceStatusResolved = false;
 let attendanceStatusFailed = false;
+let currentView = 'login';
 let allBranches = [];
 let devicePermissionAlertVisible = false;
 
@@ -1287,7 +1288,8 @@ function switchView(viewName) {
   if (currentUser && currentUser.role === 'admin' && viewName !== 'admin') {
       viewName = 'admin';
   }
-  
+  currentView = viewName;
+
   // If we are on index.html, we don't have view-login anymore
   $('[id^="view-"]').addClass('hidden');
   $('.nav-item').removeClass('active');

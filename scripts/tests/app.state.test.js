@@ -91,6 +91,27 @@ test('ปุ่มลองอีกครั้ง → เช็คซ้ำแ
   assert.doesNotMatch(ui('#btnIn').html, /เช็คไม่สำเร็จ/);
 });
 
+test('REGRESSION: สลับแอปกลับมา (visibilitychange) ต้องไม่ throw และต้องเช็คสถานะซ้ำเมื่ออยู่หน้าลงเวลา', async () => {
+  const { evalIn, fireDocument } = loadApp();
+
+  // ก่อนล็อกอิน (หน้า login) — ห้าม throw (บั๊กเดิม: currentView is not defined ทุกครั้งที่สลับแอป)
+  assert.doesNotThrow(() => fireDocument('visibilitychange'));
+
+  // ล็อกอิน + อยู่หน้าลงเวลา → ต้องเรียก get_history แบบ force_fresh อัตโนมัติ
+  evalIn(`currentUser = { id: 'U001', name: 'ทดสอบ', company: 'บ.ทดสอบ', role: 'user' }`);
+  evalIn(`currentView = 'dashboard'`);
+  evalIn(`__calls = []; callAPI = async (action, payload) => { __calls.push({ action, payload }); return { success: true, history: [] }; }`);
+
+  const fired = fireDocument('visibilitychange');
+  assert.ok(fired >= 1, 'app.js ต้องลงทะเบียน visibilitychange handler');
+  await new Promise((r) => setTimeout(r, 10));
+
+  const calls = evalIn('JSON.parse(JSON.stringify(__calls))');
+  assert.equal(calls.length, 1, 'กลับเข้าแอปที่หน้าลงเวลาต้องเช็คสถานะซ้ำ 1 ครั้ง');
+  assert.equal(calls[0].action, 'get_history');
+  assert.equal(calls[0].payload.force_fresh, true);
+});
+
 test('เวอร์ชัน frontend/backend/index.html ต้องตรงกัน (กันแอปเก่าค้างในเบราว์เซอร์)', () => {
   const fs = require('node:fs');
   const path = require('node:path');

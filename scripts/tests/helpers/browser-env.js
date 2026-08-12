@@ -95,8 +95,12 @@ function loadApp() {
   const { jq, elements, el } = createRecordingJQuery();
   const noop = () => {};
 
+  const documentListeners = new Map();
   const documentStub = {
-    addEventListener: noop,
+    addEventListener: (type, handler) => {
+      if (!documentListeners.has(type)) documentListeners.set(type, []);
+      documentListeners.get(type).push(handler);
+    },
     removeEventListener: noop,
     getElementById: () => null,
     querySelector: () => null,
@@ -159,7 +163,14 @@ function loadApp() {
   // ต้องอ่าน/เขียนผ่านสคริปต์ที่รันใน context เดียวกัน
   const evalIn = (code) => vm.runInContext(code, context);
 
-  return { context, evalIn, ui: el, elements, source };
+  // ยิง event ของ document ให้ handler ที่ app.js ลงทะเบียนไว้ทำงานจริง
+  const fireDocument = (type, event = {}) => {
+    const handlers = documentListeners.get(type) || [];
+    handlers.forEach((handler) => handler(event));
+    return handlers.length;
+  };
+
+  return { context, evalIn, ui: el, elements, source, fireDocument, documentListeners };
 }
 
 module.exports = { loadApp, APP_JS_PATH };
