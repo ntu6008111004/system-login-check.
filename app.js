@@ -18,6 +18,7 @@ let isLocationReady = false;
 let hasCheckedInToday = false;
 let hasCheckedOutToday = false;
 let isAttendanceStatusResolved = false;
+let attendanceStatusFailed = false;
 let allBranches = [];
 let devicePermissionAlertVisible = false;
 
@@ -433,7 +434,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.8";
+    const CURRENT_VERSION = "1.3.11";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -1009,8 +1010,9 @@ function buildDataApiUrl(action, payload = {}, attempt = 1) {
 
 async function callAPIGet(action, payload = {}) {
   const maxAttempts = action === 'login' ? 3 : 2;
-  const attemptTimeout = action === 'get_attendance_photo' ? 18000 : (action === 'login' ? 9000 : 12000);
-  const hedgeDelay = action === 'get_attendance_photo' ? 4500 : (action === 'login' ? 3000 : 4000);
+  // get_history ต้องจบเร็ว: หน้าลงเวลาการันตีรู้ผลรวมทุกชั้นภายใน 20 วิ (fetch ~10 วิ + JSONP ~10 วิ)
+  const attemptTimeout = action === 'get_attendance_photo' ? 18000 : (action === 'login' ? 9000 : (action === 'get_history' ? 7000 : 12000));
+  const hedgeDelay = action === 'get_attendance_photo' ? 4500 : (action === 'login' || action === 'get_history' ? 3000 : 4000);
   let settled = false;
   let launched = 0;
   let active = 0;
@@ -1168,8 +1170,8 @@ function callAPIJsonp(action, payload = {}, silent = false) {
 
     const payloadStr = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
     const maxAttempts = action === 'login' ? 3 : 2;
-    const attemptTimeout = action === 'get_attendance_photo' ? 30000 : (action === 'get_admin_data' || action === 'get_users' || action === 'get_history' ? 25000 : (action === 'login' ? 10000 : 15000));
-    const hedgeDelay = action === 'get_attendance_photo' ? 8000 : (action === 'get_admin_data' || action === 'get_users' || action === 'get_history' ? 15000 : (action === 'login' ? 3000 : 8000));
+    const attemptTimeout = action === 'get_attendance_photo' ? 30000 : (action === 'get_admin_data' || action === 'get_users' ? 25000 : (action === 'get_history' ? 7000 : (action === 'login' ? 10000 : 15000)));
+    const hedgeDelay = action === 'get_attendance_photo' ? 8000 : (action === 'get_admin_data' || action === 'get_users' ? 15000 : (action === 'login' || action === 'get_history' ? 3000 : 8000));
     const loadingText = $('#loading-overlay p').text();
     let settled = false;
     let attempt = 0;
@@ -1891,7 +1893,10 @@ function retakePhoto() {
 
 function checkButtonStatus() {
   if (!isAttendanceStatusResolved) {
-    setAttendanceStatusLoading();
+    // ถ้าเช็คสถานะล้มเหลวไปแล้ว ห้ามกลับไปสถานะ "กำลังตรวจสอบ" —
+    // callback จาก GPS/กล้องเคยเขียนทับ error จนปุ่มหมุนค้างโดยไม่มี request วิ่งอยู่จริง
+    if (attendanceStatusFailed) setAttendanceStatusError();
+    else setAttendanceStatusLoading();
     return;
   }
 
@@ -1974,6 +1979,7 @@ async function handleAttendanceClick(status) {
 
 async function checkTodayStatus(silent = true, forceFresh = false) {
   if (!currentUser) return;
+  attendanceStatusFailed = false;
   setAttendanceStatusLoading();
   try {
     // ถ้า forceFresh: ล้าง cache ก่อนเพื่อให้ได้ข้อมูลจริงจาก server เสมอ
@@ -2004,7 +2010,8 @@ async function checkTodayStatus(silent = true, forceFresh = false) {
     return res;
   } catch (error) {
     console.error('Attendance status check failed:', error);
-    $('#attendanceHint').text('⚠️ ตรวจสอบสถานะลงเวลาไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ');
+    attendanceStatusFailed = true;
+    setAttendanceStatusError();
     return { success: false, message: error.message };
   }
 }
@@ -2015,6 +2022,18 @@ function setAttendanceStatusLoading() {
   $('#btnIn').html('<i class="fas fa-circle-notch fa-spin mr-2"></i> กำลังตรวจสอบ');
   $('#btnOut').html('<i class="fas fa-circle-notch fa-spin mr-2"></i> กำลังตรวจสอบ');
   $('#attendanceHint').text('กำลังตรวจสอบสถานะเข้างานของวันนี้...');
+}
+
+function setAttendanceStatusError() {
+  isAttendanceStatusResolved = false;
+  $('#btnIn, #btnOut').prop('disabled', true);
+  $('#btnIn').html('<i class="fas fa-exclamation-circle mr-2"></i> เช็คไม่สำเร็จ');
+  $('#btnOut').html('<i class="fas fa-exclamation-circle mr-2"></i> เช็คไม่สำเร็จ');
+  $('#attendanceHint').html('⚠️ ตรวจสอบสถานะลงเวลาไม่สำเร็จ <button type="button" onclick="retryAttendanceStatus()" class="ml-1 text-[10px] bg-blue-50 text-blue-700 px-3 py-1.5 rounded-full border border-blue-200 font-bold">ลองอีกครั้ง</button>');
+}
+
+function retryAttendanceStatus() {
+  checkTodayStatus(false, true);
 }
 
 function getLocalDateKey(date = new Date()) {
@@ -2161,6 +2180,7 @@ function resetDashboardState() {
   hasCheckedInToday = false;
   hasCheckedOutToday = false;
   isAttendanceStatusResolved = false;
+  attendanceStatusFailed = false;
 
   // ล้าง cache ทั้งหมด (ยกเว้น login data)
   invalidateClientCache('get_history');

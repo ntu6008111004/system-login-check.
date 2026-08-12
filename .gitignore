@@ -1,5 +1,2 @@
-
-.gemini/
-.agents/
-/tmp/
+.claude/
 node_modules/

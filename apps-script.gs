@@ -21,8 +21,8 @@ function logToSheet(action, type, data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.9";
-const SCHEMA_VERSION = "8";
+const APP_VERSION = "1.3.11";
+const SCHEMA_VERSION = "9";
 const CACHE_TTL = {
   master: 600,
   history: 120,
@@ -519,18 +519,18 @@ function setupDatabase() {
   const updateRows = [
     [
       APP_VERSION,
-      "03/08/2026",
+      "12/08/2026",
       "user",
-      "อัปเดตการเชื่อมต่อและสิทธิ์อุปกรณ์",
-      "เพิ่มปุ่มแก้ปัญหาเมื่อไฟล์ระบบค้าง|ล้างข้อมูลชั่วคราวโดยไม่ออกจากระบบ|แนะนำการอนุญาตกล้องและตำแหน่งให้เข้าใจง่ายขึ้น",
+      "อัปเดตความเสถียรของหน้าลงเวลา",
+      "แก้อาการหน้าจอค้าง \"กำลังตรวจสอบสถานะเข้างาน\" บนมือถือ|มีปุ่มลองอีกครั้งเมื่อเครือข่ายมีปัญหา รู้ผลภายใน 20 วินาที|ตรวจสอบสถานะและลงเวลาเร็วขึ้นในช่วงเวลาเร่งด่วน",
       true,
     ],
     [
       APP_VERSION,
-      "03/08/2026",
+      "12/08/2026",
       "admin",
-      "อัปเดตข้อมูลระบบและสาขา",
-      "ดึงรายชื่อสาขาจาก Google Sheet เท่านั้น|เพิ่มเครื่องมือกู้ cache สำหรับผู้ใช้งาน|ปรับปรุงคำแนะนำสิทธิ์กล้องและ GPS",
+      "ปรับปรุงประสิทธิภาพหลังบ้าน",
+      "ลดปริมาณข้อมูลที่อ่านจากชีตตอนพนักงานลงเวลา ระบบไม่หน่วงช่วงเช้า|เพิ่ม cache ประวัติรายพนักงาน (2 นาที) พร้อมล้างอัตโนมัติเมื่อมีการลงเวลา|เพิ่มชุดทดสอบอัตโนมัติป้องกันปัญหาเดิมย้อนกลับ",
       true,
     ],
   ];
@@ -854,11 +854,21 @@ function saveAttendance(p) {
     let hasCheckedOut = false;
 
     if (userIndex >= 0 && dateIndex >= 0 && statusIndex >= 0 && sheet.getLastRow() > 1) {
-      const rows = sheet.getDataRange().getDisplayValues();
-      for (let row = 1; row < rows.length; row++) {
-        if (String(rows[row][userIndex]) !== String(p.user_id)) continue;
-        if (!String(rows[row][dateIndex]).trim().startsWith(todayPrefix)) continue;
-        const savedStatus = String(rows[row][statusIndex]).trim();
+      // อ่านเฉพาะช่วงคอลัมน์ user_id/datetime/status — ห้ามใช้ getDataRange()
+      // เพราะจะลากคอลัมน์ selfie (base64 ~45KB/แถว) ของทั้งชีทเข้ามาระหว่างถือ lock
+      const guardColumns = [userIndex, dateIndex, statusIndex];
+      const firstGuardColumn = Math.min.apply(null, guardColumns);
+      const lastGuardColumn = Math.max.apply(null, guardColumns);
+      const guardRows = sheet
+        .getRange(2, firstGuardColumn + 1, sheet.getLastRow() - 1, lastGuardColumn - firstGuardColumn + 1)
+        .getDisplayValues();
+      const localUserIndex = userIndex - firstGuardColumn;
+      const localDateIndex = dateIndex - firstGuardColumn;
+      const localStatusIndex = statusIndex - firstGuardColumn;
+      for (let row = 0; row < guardRows.length; row++) {
+        if (String(guardRows[row][localUserIndex]) !== String(p.user_id)) continue;
+        if (!String(guardRows[row][localDateIndex]).trim().startsWith(todayPrefix)) continue;
+        const savedStatus = String(guardRows[row][localStatusIndex]).trim();
         if (savedStatus === "เข้างาน") hasCheckedIn = true;
         if (savedStatus === "ออกงาน") hasCheckedOut = true;
       }
@@ -890,9 +900,15 @@ function saveAttendance(p) {
   return { success: true };
 }
 
-function getUserHistory(userId) {
-  // ⚠️ ไม่ใช้ cache สำหรับ history เพราะความถูกต้องของสถานะเข้างาน/ออกงาน
-  // สำคัญกว่าความเร็ว — ถ้า admin ลบข้อมูลจาก Sheet โดยตรง cache จะ stale
+function getUserHistory(userId, forceFresh) {
+  // Cache ต่อ user อายุสั้น (CACHE_TTL.history) — stale ได้สูงสุด 2 นาทีเฉพาะกรณี
+  // admin แก้ชีทตรง ๆ เพราะ saveAttendance ล้าง key นี้ทันทีที่บันทึก และ client
+  // ข้าม cache ได้ด้วย force_fresh ส่วนการกันบันทึกซ้ำอ่านจากชีทจริงใต้ lock เสมอ
+  const cacheKey = "db_history_" + userId;
+  if (!forceFresh) {
+    const cached = getCachedJSON(cacheKey);
+    if (cached) return cached;
+  }
 
   const sheet =
     getSpreadsheet().getSheetByName("ATTENDANCE");
@@ -929,7 +945,9 @@ function getUserHistory(userId) {
     }
   }
 
-  return { success: true, history };
+  const result = { success: true, history };
+  setCachedJSON(cacheKey, result, CACHE_TTL.history);
+  return result;
 }
 
 function toUserSummary(headers, row) {
