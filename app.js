@@ -20,6 +20,8 @@ let hasCheckedOutToday = false;
 let isAttendanceStatusResolved = false;
 let attendanceStatusFailed = false;
 let currentView = 'login';
+let attendanceCountdownTimer = null;
+let lastStatusCheckAt = 0;
 let allBranches = [];
 let devicePermissionAlertVisible = false;
 
@@ -431,11 +433,14 @@ function initApp() {
       window.location.href = 'login.html';
       return;
     }
+    // อุ่นเครื่อง Google Apps Script ระหว่างผู้ใช้กรอกรหัส (ลด cold start
+    // ของการล็อกอินและเช็คสถานะรอบแรก) — เงียบ ๆ พลาดก็ไม่เป็นไร
+    callAPI('get_version', {}, true).catch(() => {});
   }
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.11";
+    const CURRENT_VERSION = "1.3.12";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -675,10 +680,12 @@ function clearInternalCache() {
 }
 
 // Auto-refresh when user returns to the app (fixes stale state if left in background)
+// เช็คซ้ำเฉพาะเมื่อยังไม่รู้ผล หรือผลล่าสุดเก่ากว่า 60 วิ — กันวนตรวจทุกครั้งที่สลับแอป/แท็บ
+// และไม่ force ข้าม cache เพื่อให้รอบที่จำเป็นแสดงผลได้ทันทีจากข้อมูลล่าสุด
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && currentView === 'dashboard') {
-        if (currentUser) {
-            checkTodayStatus(true, true);
+        if (currentUser && (!isAttendanceStatusResolved || Date.now() - lastStatusCheckAt > 60000)) {
+            checkTodayStatus(true, false);
         }
     }
 });
@@ -1902,10 +1909,11 @@ function checkButtonStatus() {
     return;
   }
 
+  $('#btnIn, #btnOut').removeClass('attendance-checking');
   const hasGPS = $('#txtLat').text() !== '...';
   const hint = $('#attendanceHint');
-  
-  // Logic: 
+
+  // Logic:
   // - In: only if not checked in yet
   // - Out: only if checked in AND not checked out yet
   
@@ -1979,56 +1987,104 @@ async function handleAttendanceClick(status) {
   return submitAttendance(status);
 }
 
-async function checkTodayStatus(silent = true, forceFresh = false) {
+async function checkTodayStatus(silent = true, forceFresh = false, isAutoRetry = false) {
   if (!currentUser) return;
   attendanceStatusFailed = false;
-  setAttendanceStatusLoading();
+  const payload = { user_id: String(currentUser.id) };
+
+  // เปิดแอปซ้ำ: ถ้ามี cache ที่ยังไม่หมดอายุ แสดงสถานะทันทีไม่ต้องรอเครือข่าย
+  // แล้วดึงของจริงมาอัปเดตเงียบ ๆ เบื้องหลัง (ถ้าเน็ตล่มก็คงสถานะจาก cache ไว้)
+  let renderedFromCache = false;
+  if (!forceFresh && !isAutoRetry) {
+    const cached = getCache('get_history', payload, false);
+    if (cached && cached.success && Array.isArray(cached.history)) {
+      applyAttendanceHistory(cached.history);
+      renderedFromCache = true;
+    }
+  }
+  if (!renderedFromCache) setAttendanceStatusLoading(isAutoRetry);
+
   try {
     // ถ้า forceFresh: ล้าง cache ก่อนเพื่อให้ได้ข้อมูลจริงจาก server เสมอ
     if (forceFresh) {
       invalidateClientCache('get_history');
+      // ส่ง force_fresh ไปที่ server ด้วยเพื่อให้ server ข้าม script cache
+      payload.force_fresh = true;
     }
-    const payload = { user_id: String(currentUser.id) };
-    // ส่ง force_fresh ไปที่ server ด้วยเพื่อให้ server ข้าม script cache
-    if (forceFresh) payload.force_fresh = true;
-    const res = await callAPI('get_history', payload, silent);
+    const res = await callAPI('get_history', payload, silent || renderedFromCache);
     if (!res.success) throw new Error(res.message || 'ไม่สามารถตรวจสอบสถานะการลงเวลาได้');
 
-    const todayStr = getLocalDateKey();
-    
-    // Reset flags
-    hasCheckedInToday = false;
-    hasCheckedOutToday = false;
-
-    res.history.forEach(h => {
-      if (getAttendanceDateKey(h.date) !== todayStr) return;
-      const savedStatus = String(h.status || '').trim();
-      if (savedStatus === 'เข้างาน') hasCheckedInToday = true;
-      if (savedStatus === 'ออกงาน') hasCheckedOutToday = true;
-    });
-
-    isAttendanceStatusResolved = true;
-    checkButtonStatus();
+    applyAttendanceHistory(res.history);
+    lastStatusCheckAt = Date.now();
     return res;
   } catch (error) {
     console.error('Attendance status check failed:', error);
+    if (renderedFromCache) {
+      // ผู้ใช้เห็นสถานะจาก cache อยู่แล้ว — ไม่ต้องเปลี่ยนจอเป็น error
+      return { success: false, message: error.message };
+    }
+    if (!isAutoRetry) {
+      // เครือข่าย/เซิร์ฟเวอร์ช้า → ลองซ้ำอัตโนมัติอีก 1 รอบ (แบบ force fresh) ก่อนแจ้งผู้ใช้
+      return checkTodayStatus(silent, true, true);
+    }
     attendanceStatusFailed = true;
     setAttendanceStatusError();
     return { success: false, message: error.message };
   }
 }
 
-function setAttendanceStatusLoading() {
+function applyAttendanceHistory(history) {
+  stopAttendanceCountdown();
+  const todayStr = getLocalDateKey();
+  hasCheckedInToday = false;
+  hasCheckedOutToday = false;
+  (history || []).forEach(h => {
+    if (getAttendanceDateKey(h.date) !== todayStr) return;
+    const savedStatus = String(h.status || '').trim();
+    if (savedStatus === 'เข้างาน') hasCheckedInToday = true;
+    if (savedStatus === 'ออกงาน') hasCheckedOutToday = true;
+  });
+  isAttendanceStatusResolved = true;
+  checkButtonStatus();
+}
+
+function setAttendanceStatusLoading(isRetry = false) {
   isAttendanceStatusResolved = false;
-  $('#btnIn, #btnOut').prop('disabled', true);
+  $('#btnIn, #btnOut').prop('disabled', true).addClass('attendance-checking');
   $('#btnIn').html('<i class="fas fa-circle-notch fa-spin mr-2"></i> กำลังตรวจสอบ');
   $('#btnOut').html('<i class="fas fa-circle-notch fa-spin mr-2"></i> กำลังตรวจสอบ');
-  $('#attendanceHint').text('กำลังตรวจสอบสถานะเข้างานของวันนี้...');
+  // นับถอยหลังบอกผู้ใช้ว่ารออีกกี่วิ (20 วิ ต่อรอบตามงบเวลาของ get_history)
+  if (isRetry) stopAttendanceCountdown();
+  if (!attendanceCountdownTimer) {
+    startAttendanceCountdown(20, isRetry
+      ? '🔄 การเชื่อมต่อช้า กำลังลองใหม่อัตโนมัติ...'
+      : 'กำลังตรวจสอบสถานะเข้างานของวันนี้...');
+  }
+}
+
+function startAttendanceCountdown(seconds, label) {
+  stopAttendanceCountdown();
+  let remaining = seconds;
+  const render = () => $('#attendanceHint').text(`${label} (${remaining} วิ)`);
+  render();
+  attendanceCountdownTimer = window.setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) { stopAttendanceCountdown(); return; }
+    render();
+  }, 1000);
+}
+
+function stopAttendanceCountdown() {
+  if (attendanceCountdownTimer) {
+    window.clearInterval(attendanceCountdownTimer);
+    attendanceCountdownTimer = null;
+  }
 }
 
 function setAttendanceStatusError() {
+  stopAttendanceCountdown();
   isAttendanceStatusResolved = false;
-  $('#btnIn, #btnOut').prop('disabled', true);
+  $('#btnIn, #btnOut').prop('disabled', true).removeClass('attendance-checking');
   $('#btnIn').html('<i class="fas fa-exclamation-circle mr-2"></i> เช็คไม่สำเร็จ');
   $('#btnOut').html('<i class="fas fa-exclamation-circle mr-2"></i> เช็คไม่สำเร็จ');
   $('#attendanceHint').html('⚠️ ตรวจสอบสถานะลงเวลาไม่สำเร็จ <button type="button" onclick="retryAttendanceStatus()" class="ml-1 text-[10px] bg-blue-50 text-blue-700 px-3 py-1.5 rounded-full border border-blue-200 font-bold">ลองอีกครั้ง</button>');
@@ -2183,6 +2239,8 @@ function resetDashboardState() {
   hasCheckedOutToday = false;
   isAttendanceStatusResolved = false;
   attendanceStatusFailed = false;
+  lastStatusCheckAt = 0;
+  stopAttendanceCountdown();
 
   // ล้าง cache ทั้งหมด (ยกเว้น login data)
   invalidateClientCache('get_history');
@@ -2205,7 +2263,9 @@ function prefetchUserHistory() {
 
 async function loadHistory(force = false) {
   const clickAt = Date.now();
-  const payload = { user_id: currentUser.id };
+  // payload ต้องหน้าตาเดียวกับ checkTodayStatus เป๊ะ ๆ เพื่อให้ inFlightRequests
+  // รวม request ซ้ำเป็นเส้นเดียว (เดิมยิง get_history คู่ขนาน 2 เส้นตอนเปิดหน้า)
+  const payload = { user_id: String(currentUser.id) };
   const requestId = ++historyLoadSequence;
   const cached = force ? null : getCache('get_history', payload);
 

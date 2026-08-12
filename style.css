@@ -152,7 +152,7 @@ body.login-page {
   transform: translateY(-2px);
   box-shadow: 0 14px 22px -8px rgba(30, 58, 138, 0.38);
 }
-.btn-primary:disabled { 
+.btn-primary:disabled {
     background: #e2e8f0;
     color: #94a3b8;
     box-shadow: none;
@@ -160,6 +160,10 @@ body.login-page {
     border: 0;
     opacity: 1;
     transform: none !important;
+}
+/* ระหว่าง "กำลังตรวจสอบ" ปุ่มยังคงสีพื้น (เขียว/แดง) — ตัวอักษรต้องขาวให้อ่านออก */
+.btn-primary.attendance-checking:disabled {
+    color: #fff;
 }
 .btn-primary:active:not(:disabled) { transform: scale(0.97); }
 

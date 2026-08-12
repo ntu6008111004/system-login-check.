@@ -91,25 +91,97 @@ test('ปุ่มลองอีกครั้ง → เช็คซ้ำแ
   assert.doesNotMatch(ui('#btnIn').html, /เช็คไม่สำเร็จ/);
 });
 
-test('REGRESSION: สลับแอปกลับมา (visibilitychange) ต้องไม่ throw และต้องเช็คสถานะซ้ำเมื่ออยู่หน้าลงเวลา', async () => {
+test('REGRESSION: สลับแอปกลับมา — ไม่ throw, เช็คเมื่อจำเป็น และไม่วนตรวจถี่ ๆ', async () => {
   const { evalIn, fireDocument } = loadApp();
 
   // ก่อนล็อกอิน (หน้า login) — ห้าม throw (บั๊กเดิม: currentView is not defined ทุกครั้งที่สลับแอป)
   assert.doesNotThrow(() => fireDocument('visibilitychange'));
 
-  // ล็อกอิน + อยู่หน้าลงเวลา → ต้องเรียก get_history แบบ force_fresh อัตโนมัติ
   evalIn(`currentUser = { id: 'U001', name: 'ทดสอบ', company: 'บ.ทดสอบ', role: 'user' }`);
   evalIn(`currentView = 'dashboard'`);
   evalIn(`__calls = []; callAPI = async (action, payload) => { __calls.push({ action, payload }); return { success: true, history: [] }; }`);
 
+  // ยังไม่รู้ผล → กลับเข้าแอปต้องเช็ค 1 ครั้ง (แบบไม่บังคับข้าม cache)
   const fired = fireDocument('visibilitychange');
   assert.ok(fired >= 1, 'app.js ต้องลงทะเบียน visibilitychange handler');
   await new Promise((r) => setTimeout(r, 10));
-
-  const calls = evalIn('JSON.parse(JSON.stringify(__calls))');
-  assert.equal(calls.length, 1, 'กลับเข้าแอปที่หน้าลงเวลาต้องเช็คสถานะซ้ำ 1 ครั้ง');
+  let calls = evalIn('JSON.parse(JSON.stringify(__calls))');
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].action, 'get_history');
-  assert.equal(calls[0].payload.force_fresh, true);
+  assert.ok(!calls[0].payload.force_fresh, 'ห้าม force_fresh ตอนสลับแอป — ให้ใช้ cache ได้');
+
+  // รู้ผลสด ๆ แล้ว → สลับแอปซ้ำกี่รอบก็ห้ามยิงเพิ่ม (แก้อาการวนตรวจซ้ำ)
+  fireDocument('visibilitychange');
+  fireDocument('visibilitychange');
+  await new Promise((r) => setTimeout(r, 10));
+  calls = evalIn('JSON.parse(JSON.stringify(__calls))');
+  assert.equal(calls.length, 1, 'ผลยังสดอยู่ ห้ามเช็คซ้ำ');
+
+  // ผลเก่าเกิน 60 วิ → ค่อยเช็คใหม่ 1 ครั้ง
+  evalIn('lastStatusCheckAt = Date.now() - 61000');
+  fireDocument('visibilitychange');
+  await new Promise((r) => setTimeout(r, 10));
+  calls = evalIn('JSON.parse(JSON.stringify(__calls))');
+  assert.equal(calls.length, 2, 'ผลเก่าแล้วต้องรีเฟรช 1 ครั้ง');
+});
+
+test('ระหว่างตรวจสอบ: มีตัวเลขนับถอยหลัง และปุ่มใช้สไตล์ตัวอักษรขาว', async () => {
+  const { evalIn, ui } = loadApp();
+  evalIn(`currentUser = { id: 'U001', name: 'ทดสอบ', company: 'บ.ทดสอบ', role: 'user' }`);
+  evalIn(`callAPI = () => new Promise(() => {})`); // ค้างไว้เพื่อดูสถานะระหว่างรอ
+  evalIn(`checkTodayStatus(true, false)`);
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.match(ui('#attendanceHint').text, /กำลังตรวจสอบสถานะเข้างานของวันนี้.*\(\d+ วิ\)/, 'hint ต้องบอกจำนวนวินาที');
+  assert.ok(ui('#btnIn').classes.has('attendance-checking'), 'ปุ่มต้องได้ class ตัวอักษรขาวระหว่างตรวจสอบ');
+  assert.ok(ui('#btnOut').classes.has('attendance-checking'));
+  evalIn('stopAttendanceCountdown()');
+});
+
+test('ล้มเหลว → ลองใหม่อัตโนมัติ 1 รอบ (force_fresh) ก่อนขึ้น error', async () => {
+  const { evalIn, ui } = loadApp();
+  evalIn(`currentUser = { id: 'U001', name: 'ทดสอบ', company: 'บ.ทดสอบ', role: 'user' }`);
+  evalIn(`__payloads = []; callAPI = async (a, p) => { __payloads.push(p); throw new Error('server down'); }`);
+
+  const res = await evalIn(`checkTodayStatus(true, false)`);
+  assert.equal(res.success, false);
+  const payloads = evalIn('JSON.parse(JSON.stringify(__payloads))');
+  assert.equal(payloads.length, 2, 'ต้องลองซ้ำอัตโนมัติ 1 ครั้ง (รวมเป็น 2)');
+  assert.ok(!payloads[0].force_fresh && payloads[1].force_fresh === true, 'รอบ retry ต้อง force_fresh');
+  assert.match(ui('#btnIn').html, /เช็คไม่สำเร็จ/);
+  assert.match(ui('#attendanceHint').html, /ลองอีกครั้ง/);
+});
+
+test('ลองใหม่อัตโนมัติสำเร็จ → ผู้ใช้ไม่เห็น error เลย', async () => {
+  const { evalIn, ui } = loadApp();
+  evalIn(`currentUser = { id: 'U001', name: 'ทดสอบ', company: 'บ.ทดสอบ', role: 'user' }`);
+  const history = JSON.stringify([{ date: `${todayThai()} 08:00:00`, status: 'เข้างาน' }]);
+  evalIn(`__n = 0; callAPI = async () => { __n++; if (__n === 1) throw new Error('cold start'); return { success: true, history: ${history} }; }`);
+
+  const res = await evalIn(`checkTodayStatus(true, false)`);
+  assert.equal(res.success, true);
+  assert.equal(evalIn('__n'), 2);
+  assert.equal(evalIn('attendanceStatusFailed'), false);
+  assert.equal(evalIn('isAttendanceStatusResolved'), true);
+  assert.equal(ui('#btnIn').prop.disabled, true, 'เข้างานแล้วตาม history');
+  assert.doesNotMatch(ui('#btnIn').html, /เช็คไม่สำเร็จ/);
+});
+
+test('เปิดแอปซ้ำ: แสดงสถานะจาก cache ทันที ไม่ต้องรอเครือข่าย', async () => {
+  const { evalIn, ui } = loadApp();
+  evalIn(`currentUser = { id: 'U001', name: 'ทดสอบ', company: 'บ.ทดสอบ', role: 'user' }`);
+  const history = JSON.stringify([{ date: `${todayThai()} 08:00:00`, status: 'เข้างาน' }]);
+  evalIn(`setCache('get_history', { user_id: 'U001' }, { success: true, history: ${history} })`);
+  evalIn(`callAPI = () => new Promise(() => {})`); // เน็ตช้าสุด ๆ — cache ต้องช่วยให้เห็นผลทันที
+
+  evalIn(`checkTodayStatus(true, false)`);
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(evalIn('isAttendanceStatusResolved'), true, 'ต้อง resolve จาก cache ทันที');
+  assert.equal(ui('#btnIn').prop.disabled, true, 'สถานะเข้างานแล้วจาก cache');
+  assert.equal(ui('#btnOut').prop.disabled, false);
+  assert.equal(evalIn('attendanceCountdownTimer'), null, 'ไม่ต้องโชว์นับถอยหลังเมื่อมี cache');
+  assert.doesNotMatch(ui('#attendanceHint').text, /กำลังตรวจสอบสถานะเข้างานของวันนี้/);
 });
 
 test('เวอร์ชัน frontend/backend/index.html ต้องตรงกัน (กันแอปเก่าค้างในเบราว์เซอร์)', () => {
