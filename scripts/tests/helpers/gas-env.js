@@ -75,7 +75,7 @@ function createMockSheet(name, rows) {
   return { sheet, data, calls };
 }
 
-function loadGas({ attendanceRows = [] } = {}) {
+function loadGas({ attendanceRows = [], lockAvailable = true } = {}) {
   const attendance = createMockSheet('ATTENDANCE', [ATT_HEADERS, ...attendanceRows]);
   const sheets = { ATTENDANCE: attendance };
 
@@ -91,7 +91,7 @@ function loadGas({ attendanceRows = [] } = {}) {
   };
 
   const props = new Map();
-  const lockOps = { wait: 0, release: 0 };
+  const lockOps = { try: 0, release: 0 };
 
   const sandbox = {
     console, JSON, Math, Date, Object, Array, String, Number, Boolean, RegExp, Error, Map, Set, parseInt, parseFloat, isNaN, encodeURIComponent, decodeURIComponent,
@@ -99,7 +99,13 @@ function loadGas({ attendanceRows = [] } = {}) {
       openById: () => ({ getSheetByName: (n) => (sheets[n] ? sheets[n].sheet : null), insertSheet: (n) => { sheets[n] = createMockSheet(n, [[]]); return sheets[n].sheet; } }),
     },
     CacheService: { getScriptCache: () => scriptCache },
-    LockService: { getScriptLock: () => ({ waitLock: () => { lockOps.wait += 1; }, releaseLock: () => { lockOps.release += 1; } }) },
+    LockService: {
+      getScriptLock: () => ({
+        tryLock: () => { lockOps.try += 1; return lockAvailable; },
+        waitLock: () => { lockOps.wait = (lockOps.wait || 0) + 1; },
+        releaseLock: () => { lockOps.release += 1; },
+      }),
+    },
     PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => (props.has(k) ? props.get(k) : null), setProperty: (k, v) => props.set(k, String(v)) }) },
     Session: { getScriptTimeZone: () => 'Asia/Bangkok' },
     Utilities: {

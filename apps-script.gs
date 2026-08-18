@@ -3,7 +3,8 @@
  */
 
 function logToSheet(action, type, data) {
-  // Skip verbose or sensitive actions to prevent log bloat and data leaks
+  // Skip verbose read actions.  Mutation logs are useful when investigating
+  // failed clock-outs, but must never contain photos, passwords or profiles.
   const skipActions = ["get_admin_data", "get_attendance_photo", "get_history", "get_users", "get_branches", "get_update_notice", "get_version", "reverse_geocode", "login"];
   if (skipActions.includes(action)) return;
 
@@ -14,14 +15,40 @@ function logToSheet(action, type, data) {
       logSheet = ss.insertSheet("SYS_LOG");
       logSheet.appendRow(["Timestamp", "Action", "Type", "Data"]);
     }
-    logSheet.appendRow([new Date(), action, type, JSON.stringify(data)]);
+    // A checkout request previously wrote the same Base64 selfie twice
+    // (selfie_base64 + selfie) to SYS_LOG.  That made a single log row very
+    // large, slowed concurrent writes, and could exceed the Sheets cell size
+    // limit.  Keep only safe, bounded diagnostics in the operational log.
+    const serialized = JSON.stringify(sanitizeLogData(data));
+    logSheet.appendRow([new Date(), action, type, serialized.slice(0, 45000)]);
   } catch (e) {
     // Fail silently in logs
   }
 }
 
+function sanitizeLogData(data) {
+  const source = data && typeof data === "object" ? data : {};
+  const safe = {};
+  const secretFields = ["selfie", "selfie_base64", "photo", "profile", "password"];
+
+  Object.keys(source).forEach(function (key) {
+    const value = source[key];
+    const normalizedKey = String(key).toLowerCase();
+    if (secretFields.indexOf(normalizedKey) !== -1) {
+      if (value != null && String(value).length) {
+        safe[normalizedKey + "_omitted_chars"] = String(value).length;
+      }
+      return;
+    }
+    // Bound arbitrary text supplied by clients, so a malformed request cannot
+    // recreate the same log-cell limit problem through another field.
+    safe[key] = typeof value === "string" ? value.slice(0, 1000) : value;
+  });
+  return safe;
+}
+
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.12";
+const APP_VERSION = "1.3.13";
 const SCHEMA_VERSION = "10";
 const CACHE_TTL = {
   master: 600,
@@ -841,8 +868,20 @@ function saveAttendance(p) {
   });
 
   const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  let lockAcquired = false;
   try {
+    // A burst of people clocking out at the same time used to throw from
+    // waitLock after 10 seconds, which reached the client as a generic
+    // "save failed" error. Return a retryable result instead.
+    lockAcquired = lock.tryLock(10000);
+    if (!lockAcquired) {
+      return {
+        success: false,
+        code: "ATTENDANCE_BUSY",
+        retry_after_ms: 1200,
+        message: "ระบบกำลังบันทึกการลงเวลาหลายรายการ กรุณาลองใหม่อีกครั้ง",
+      };
+    }
     // Enforce the daily sequence on the server.  This prevents duplicate
     // check-ins even when an old browser tab has stale attendance status.
     const lowercaseHeaders = headers.map(function (header) { return String(header).toLowerCase(); });
@@ -893,7 +932,7 @@ function saveAttendance(p) {
 
     sheet.getRange(sheet.getLastRow() + 1, 1, 1, newRow.length).setValues([newRow]);
   } finally {
-    lock.releaseLock();
+    if (lockAcquired) lock.releaseLock();
   }
   clearScriptCache(["db_history_" + p.user_id]);
   bumpDataVersion("attendance");

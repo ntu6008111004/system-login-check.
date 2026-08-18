@@ -76,8 +76,48 @@ test('REGRESSION: saveAttendance ห้ามใช้ getDataRange และช
     assert.equal(read.numCols, 3, 'อ่านแค่ user_id/datetime/status');
     assert.ok(read.col + read.numCols - 1 < 9, 'ช่วงอ่านต้องไม่ถึงคอลัมน์ selfie');
   }
-  assert.equal(env.lockOps.wait, 1);
+  assert.equal(env.lockOps.try, 1);
   assert.equal(env.lockOps.release, 1);
+});
+
+test('saveAttendance: ถ้า lock ไม่ว่างต้องตอบให้ client retry โดยไม่เขียนแถว', () => {
+  const env = loadGas({ lockAvailable: false });
+  const res = env.call('saveAttendance', {
+    user_id: 'U009', status: 'เข้างาน', latitude: 17.4, longitude: 102.8,
+    location_name: 'อุดรธานี', selfie_base64: 'data:image/jpeg;base64,TESTPHOTO',
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(res)), {
+    success: false,
+    code: 'ATTENDANCE_BUSY',
+    retry_after_ms: 1200,
+    message: 'ระบบกำลังบันทึกการลงเวลาหลายรายการ กรุณาลองใหม่อีกครั้ง',
+  });
+  assert.equal(env.attendance.calls.setValues.length, 0);
+  assert.equal(env.lockOps.try, 1);
+  assert.equal(env.lockOps.release, 0, 'ห้าม release lock ที่ยังไม่ได้รับ');
+});
+
+test('sanitizeLogData: ห้ามเก็บภาพหรือรหัสผ่านลง SYS_LOG', () => {
+  const env = seededEnv();
+  const photo = 'data:image/jpeg;base64,' + 'A'.repeat(50000);
+  const safe = env.call('sanitizeLogData', {
+    user_id: 'U001',
+    selfie_base64: photo,
+    selfie: photo,
+    password: 'secret',
+    note: 'x'.repeat(2000),
+  });
+  const result = JSON.parse(JSON.stringify(safe));
+
+  assert.deepEqual(result, {
+    user_id: 'U001',
+    selfie_base64_omitted_chars: photo.length,
+    selfie_omitted_chars: photo.length,
+    password_omitted_chars: 6,
+    note: 'x'.repeat(1000),
+  });
+  assert.doesNotMatch(JSON.stringify(result), /data:image|secret/);
 });
 
 test('saveAttendance: บันทึกสำเร็จ → เพิ่มแถวถูกต้อง + ล้าง cache ประวัติ + bump data version', () => {

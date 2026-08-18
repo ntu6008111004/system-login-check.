@@ -1,4 +1,4 @@
-// Web App deployment v58 (03/08/2026). Keep this in sync when a new deployment URL is created.
+// Web App deployment v62 (18/08/2026). Keep this in sync when a new deployment URL is created.
 const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5cU9WYWZyZnBqcWlqYkR4NDFPTUpXVUZ6TWNjaGpnSGJOUjF5SUp1RENGWjVaUnBNVmczZS1WZ05zcVpBZXFaVGsvZXhlYw==';
 const API_URL = atob(_u);
 
@@ -440,7 +440,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.12";
+    const CURRENT_VERSION = "1.3.13";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -2171,15 +2171,26 @@ async function submitAttendance(status) {
   $('#loading-overlay p').text('กำลังบันทึกข้อมูล...');
   showLoading(false); // ให้ callAPI จัดการ loading เอง
 
-  const res = await callAPI('save_attendance', { 
+  // Send one photo field only.  The backend accepts the legacy aliases, but
+  // sending both doubled the mobile upload and made busy checkout periods
+  // much more likely to time out.
+  const attendancePayload = {
     user_id: currentUser.id, 
     status, 
     latitude: currentCoords.lat, 
     longitude: currentCoords.lng, 
     location_name: currentLocationName,
-    selfie_base64: compressedPhoto,
-    selfie: compressedPhoto
-  });
+    selfie_base64: compressedPhoto
+  };
+  let res = await callAPI('save_attendance', attendancePayload);
+
+  // The server deliberately returns a retryable response when another
+  // checkout is holding its short write lock. Retry once automatically so the
+  // employee does not have to repeat the photo/GPS flow.
+  if (res && res.code === 'ATTENDANCE_BUSY') {
+    await new Promise(resolve => setTimeout(resolve, Number(res.retry_after_ms) || 1200));
+    res = await callAPI('save_attendance', attendancePayload);
+  }
 
   if (res.success) {
     // ===== STEP 5: บันทึกสำเร็จ → ล้างทุกอย่างบน dashboard =====

@@ -184,6 +184,34 @@ test('เปิดแอปซ้ำ: แสดงสถานะจาก cache
   assert.doesNotMatch(ui('#attendanceHint').text, /กำลังตรวจสอบสถานะเข้างานของวันนี้/);
 });
 
+test('ออกงาน: ส่งรูปเพียงฟิลด์เดียว และ retry อัตโนมัติเมื่อ backend กำลังบันทึกอยู่', async () => {
+  const { evalIn } = loadApp();
+  evalIn(`
+    currentUser = { id: 'U001', name: 'ทดสอบ', company: 'บ.ทดสอบ', role: 'user' };
+    currentCoords = { lat: 17.4, lng: 102.8 };
+    currentLocationName = 'อุดรธานี';
+    lastCapturedPhoto = 'data:image/jpeg;base64,' + 'O'.repeat(200);
+    compressImage = async () => 'data:image/jpeg;base64,' + 'C'.repeat(200);
+    resetDashboardState = () => { __resetDashboardCalled = true; };
+    __requests = [];
+    __resetDashboardCalled = false;
+    callAPI = async (action, payload) => {
+      __requests.push({ action, payload });
+      return __requests.length === 1
+        ? { success: false, code: 'ATTENDANCE_BUSY', retry_after_ms: 1 }
+        : { success: true };
+    };
+  `);
+
+  await evalIn(`submitAttendance('ออกงาน')`);
+  const requests = evalIn('JSON.parse(JSON.stringify(__requests))');
+  const attendanceRequests = requests.filter((request) => request.action === 'save_attendance');
+  assert.equal(attendanceRequests.length, 2, 'ต้องลองใหม่หนึ่งครั้งเมื่อมีการเขียนพร้อมกัน');
+  assert.ok(attendanceRequests.every((request) => request.payload.selfie_base64 === 'data:image/jpeg;base64,' + 'C'.repeat(200)));
+  assert.ok(attendanceRequests.every((request) => !Object.hasOwn(request.payload, 'selfie')), 'ห้ามส่งรูปซ้ำสองฟิลด์');
+  assert.equal(evalIn('__resetDashboardCalled'), true, 'retry สำเร็จต้องจบกระบวนการออกงานตามปกติ');
+});
+
 test('เวอร์ชัน frontend/backend/index.html ต้องตรงกัน (กันแอปเก่าค้างในเบราว์เซอร์)', () => {
   const fs = require('node:fs');
   const path = require('node:path');
