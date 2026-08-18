@@ -240,6 +240,42 @@ test('ทุกช่องทางล้มหมด → ข้อความ
   const res = await evalIn(`callAPI('save_attendance', { user_id: 'U001' }, true)`);
   assert.equal(res.success, false);
   assert.match(res.message, /เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ/, 'ต้องขึ้นข้อความภาษาไทยที่ผู้ใช้เข้าใจได้');
+
+  // ต้องพกข้อมูล debug ครบทุกช่องทางที่ลอง เพื่อให้ปุ่ม "ดูรายละเอียด" ใช้งานได้จริง
+  assert.ok(res.diag, 'ผลลัพธ์ที่ล้มเหลวต้องแนบ diagnostics');
+  const labels = Array.from(res.diag.attempts).map((a) => a.transport).join(',');
+  assert.match(labels, /POST #1/);
+  assert.match(labels, /POST #2/);
+  assert.match(labels, /GET/);
+  assert.match(labels, /JSONP/);
+});
+
+test('รายงาน debug อ่านรู้เรื่อง: มีเวอร์ชัน อุปกรณ์ และผลรายช่องทาง', () => {
+  const { evalIn } = loadApp();
+  const report = evalIn(`
+    const diag = createApiDiagnostics('save_attendance', { user_id: 'U001' });
+    recordApiAttempt(diag, 'POST #1', Date.now() - 1500, new Error('Load failed'));
+    recordApiAttempt(diag, 'JSONP', Date.now() - 200, null);
+    formatApiDiagnostics(diag);
+  `);
+  assert.match(report, /เวอร์ชันแอป: /);
+  assert.match(report, /อุปกรณ์: /);
+  assert.match(report, /คำสั่ง: save_attendance/);
+  assert.match(report, /POST #1 .*Load failed/);
+  assert.match(report, /JSONP .*สำเร็จ/);
+});
+
+test('คำสั่งเขียนข้อมูลห้ามยิงซ้อน: GET fallback ของ save_attendance ยิงครั้งเดียว', async () => {
+  const { evalIn } = loadApp();
+  evalIn(`__fetchCalls = 0; fetch = () => { __fetchCalls++; return Promise.reject(new Error('down')); };`);
+
+  const outcome = await evalIn(`callAPIGet('save_attendance', { user_id: 'U001' }).then(() => 'resolved', () => 'rejected')`);
+  assert.equal(outcome, 'rejected');
+  assert.equal(evalIn('__fetchCalls'), 1, 'mutation ต้องยิงรอบเดียว กันบันทึกแข่งกันเอง');
+
+  evalIn('__fetchCalls = 0');
+  await evalIn(`callAPIGet('get_history', { user_id: 'U001' }).then(() => 'resolved', () => 'rejected')`);
+  assert.equal(evalIn('__fetchCalls'), 2, 'read action ยัง retry ได้ตามเดิม');
 });
 
 test('เวอร์ชันใหม่มาถึงเครื่อง → initApp ล้างแคชค้างของเวอร์ชันเก่าอัตโนมัติ (คง login ไว้)', () => {

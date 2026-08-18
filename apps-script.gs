@@ -19,6 +19,13 @@ function logToSheet(action, type, data) {
       if (lastRow > 50) {
         logSheet.deleteRows(2, lastRow - 50);
       }
+      // ชีทนี้เคยบวมถึง ~2.4 ล้านช่องจากแถวว่างที่ค้างใน grid (เนื้อหาจริง 50 แถว)
+      // เก็บกวาดครั้งเดียวเมื่อพบว่าบวม — รอบถัดไปเงื่อนไขนี้จะไม่จริงอีก
+      const maxRows = logSheet.getMaxRows();
+      const keepRows = Math.max(logSheet.getLastRow(), 1) + 100;
+      if (maxRows > keepRows + 1000) {
+        logSheet.deleteRows(keepRows + 1, maxRows - keepRows);
+      }
     }
     const serialized = JSON.stringify(sanitizeLogData(data));
     logSheet.appendRow([new Date(), action, type, serialized.slice(0, 1000)]);
@@ -49,8 +56,10 @@ function sanitizeLogData(data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.15";
+const APP_VERSION = "1.3.16";
 const SCHEMA_VERSION = "10";
+// จำนวนแถวท้ายชีทที่อ่านเพื่อกันลงเวลาซ้ำ — พนักงาน ~22 คน = ~44 แถว/วัน จึงครอบคลุมย้อนหลังกว่า 10 วัน
+const GUARD_SCAN_ROWS = 500;
 const CACHE_TTL = {
   master: 600,
   history: 120,
@@ -177,6 +186,7 @@ function handleAction(action, data) {
   else if (action === "reverse_geocode") result = reverseGeocodeLocation(data.latitude, data.longitude);
   else if (action === "reset_all_passwords") result = resetAllPasswords();
   else if (action === "clean_sys_log") result = cleanSysLog();
+  else if (action === "diag_attendance") result = diagAttendance();
   else if (action === "migrate_db") result = migrateDatabase();
   else result = { success: false, code: "UNKNOWN_ACTION", message: "Unknown action: " + action };
 
@@ -745,13 +755,97 @@ function resetAllPasswords() {
 function cleanSysLog() {
   try {
     const ss = getSpreadsheet();
-    let logSheet = ss.getSheetByName("SYS_LOG");
+    const trimmed = [];
+    const logSheet = ss.getSheetByName("SYS_LOG");
     if (logSheet && logSheet.getLastRow() > 10) {
       logSheet.deleteRows(2, logSheet.getLastRow() - 10);
     }
-    return { success: true, message: "SYS_LOG pruned" };
+    // ตัดแถว/คอลัมน์ว่างที่ค้างใน grid ของทุกชีท — ของว่างพวกนี้กินโควตาเซลล์
+    // และทำให้ทั้งไฟล์อืดโดยไม่มีข้อมูลจริงอยู่เลย
+    ss.getSheets().forEach(function (sheet) {
+      const keepRows = Math.max(sheet.getLastRow(), 1) + 100;
+      const maxRows = sheet.getMaxRows();
+      if (maxRows > keepRows) {
+        sheet.deleteRows(keepRows + 1, maxRows - keepRows);
+        trimmed.push(sheet.getName() + ": -" + (maxRows - keepRows) + " rows");
+      }
+      const keepColumns = Math.max(sheet.getLastColumn(), 1) + 2;
+      const maxColumns = sheet.getMaxColumns();
+      if (maxColumns > keepColumns) {
+        sheet.deleteColumns(keepColumns + 1, maxColumns - keepColumns);
+        trimmed.push(sheet.getName() + ": -" + (maxColumns - keepColumns) + " columns");
+      }
+    });
+    return { success: true, message: "SYS_LOG pruned", trimmed: trimmed };
   } catch (e) {
     return { success: false, message: e.toString() };
+  }
+}
+
+/**
+ * 🩺 วัดเวลาแต่ละขั้นของเส้นทางบันทึกเวลา โดย "ไม่เขียนแถวจริง"
+ * ใช้ตอนผู้ใช้แจ้งว่าบันทึกไม่สำเร็จ เพื่อดูว่าช้า/ค้างที่ขั้นไหน
+ */
+function diagAttendance() {
+  const timings = [];
+  const measure = function (label, fn) {
+    const startedAt = Date.now();
+    const value = fn();
+    timings.push({ step: label, ms: Date.now() - startedAt });
+    return value;
+  };
+
+  try {
+    const ss = measure("open_spreadsheet", function () { return getSpreadsheet(); });
+    const sheet = measure("get_attendance_sheet", function () { return ss.getSheetByName("ATTENDANCE"); });
+    if (!sheet) return { success: false, message: "ไม่พบชีท ATTENDANCE", timings: timings };
+
+    const headers = measure("get_headers", function () { return getHeaders(sheet); });
+    const lastRow = measure("get_last_row", function () { return sheet.getLastRow(); });
+
+    const lowercaseHeaders = headers.map(function (header) { return String(header).toLowerCase(); });
+    const guardColumns = ["user_id", "datetime", "status"]
+      .map(function (name) { return lowercaseHeaders.indexOf(name); })
+      .filter(function (index) { return index >= 0; });
+
+    if (guardColumns.length === 3 && lastRow > 1) {
+      const firstGuardColumn = Math.min.apply(null, guardColumns);
+      const lastGuardColumn = Math.max.apply(null, guardColumns);
+      measure("read_guard_columns", function () {
+        return sheet
+          .getRange(2, firstGuardColumn + 1, lastRow - 1, lastGuardColumn - firstGuardColumn + 1)
+          .getDisplayValues();
+      });
+    }
+
+    const lock = LockService.getScriptLock();
+    const lockAcquired = measure("acquire_lock", function () { return lock.tryLock(5000); });
+    if (lockAcquired) lock.releaseLock();
+
+    const sheets = measure("scan_sheet_sizes", function () {
+      return ss.getSheets().map(function (each) {
+        return {
+          name: each.getName(),
+          rows: each.getLastRow(),
+          columns: each.getLastColumn(),
+          cells: each.getMaxRows() * each.getMaxColumns(),
+        };
+      });
+    });
+
+    const totalCells = sheets.reduce(function (sum, each) { return sum + each.cells; }, 0);
+
+    return {
+      success: true,
+      attendance_rows: lastRow,
+      lock_acquired: lockAcquired,
+      total_cells: totalCells,
+      cell_limit_pct: Math.round((totalCells / 10000000) * 1000) / 10,
+      sheets: sheets,
+      timings: timings,
+    };
+  } catch (e) {
+    return { success: false, message: e.toString(), timings: timings };
   }
 }
 
@@ -945,11 +1039,15 @@ function saveAttendance(p) {
     if (userIndex >= 0 && dateIndex >= 0 && statusIndex >= 0 && sheet.getLastRow() > 1) {
       // อ่านเฉพาะช่วงคอลัมน์ user_id/datetime/status — ห้ามใช้ getDataRange()
       // เพราะจะลากคอลัมน์ selfie (base64 ~45KB/แถว) ของทั้งชีทเข้ามาระหว่างถือ lock
+      // และอ่านเฉพาะแถวท้าย ๆ เท่านั้น: การลงเวลาต่อท้ายเสมอ ข้อมูล "วันนี้" จึงอยู่ท้ายชีท
+      // ตอนวัดจริงชีทมี 1,747 แถว การอ่านทั้งหมดกินเวลา ~2.5 วิ ต่อการบันทึกหนึ่งครั้ง
       const guardColumns = [userIndex, dateIndex, statusIndex];
       const firstGuardColumn = Math.min.apply(null, guardColumns);
       const lastGuardColumn = Math.max.apply(null, guardColumns);
+      const lastRow = sheet.getLastRow();
+      const guardStartRow = Math.max(2, lastRow - GUARD_SCAN_ROWS + 1);
       const guardRows = sheet
-        .getRange(2, firstGuardColumn + 1, sheet.getLastRow() - 1, lastGuardColumn - firstGuardColumn + 1)
+        .getRange(guardStartRow, firstGuardColumn + 1, lastRow - guardStartRow + 1, lastGuardColumn - firstGuardColumn + 1)
         .getDisplayValues();
       const localUserIndex = userIndex - firstGuardColumn;
       const localDateIndex = dateIndex - firstGuardColumn;

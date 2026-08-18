@@ -5,7 +5,7 @@ const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J6U2pyYUxCXy1Z
 const API_URL = atob(_u);
 
 // เวอร์ชันของโค้ดชุดนี้ — ต้อง bump พร้อม APP_VERSION (apps-script.gs) และ ?v= (index.html/login.html) เสมอ
-const CURRENT_VERSION = "1.3.15";
+const CURRENT_VERSION = "1.3.16";
 
 // System State
 let currentUser = null;
@@ -1052,15 +1052,143 @@ function enhanceSearchableDropdown(select) {
  */
 const DATA_ACTIONS = ['login', 'get_history', 'get_admin_data', 'get_attendance_photo', 'get_users', 'get_user_profile', 'get_branches', 'get_update_notice', 'get_version', 'reverse_geocode'];
 
+/**
+ * 🩺 บันทึกผลของทุกช่องทางที่ใช้ยิงคำสั่ง (POST / GET / JSONP)
+ * ผู้ใช้ทั่วไปเห็นแค่ข้อความภาษาชาวบ้าน แต่กดปุ่ม "ดูรายละเอียด" แล้วแคปหน้าจอ
+ * ส่งให้ผู้ดูแลระบบได้ทันทีว่าพังที่ช่องทางไหน ด้วยเหตุผลอะไร
+ */
+function createApiDiagnostics(action, payload = {}) {
+  let payloadKB = 0;
+  try {
+    payloadKB = Math.round(JSON.stringify(payload).length / 1024);
+  } catch (error) {
+    payloadKB = -1;
+  }
+  return {
+    action,
+    version: CURRENT_VERSION,
+    startedAt: Date.now(),
+    payloadKB,
+    attempts: []
+  };
+}
+
+function recordApiAttempt(diag, transport, startedAt, error) {
+  if (!diag) return;
+  diag.attempts.push({
+    transport,
+    seconds: Math.round((Date.now() - startedAt) / 100) / 10,
+    error: error ? `${error.name || 'Error'}: ${error.message || error}` : 'สำเร็จ'
+  });
+}
+
+function describeDevice() {
+  const ua = String(navigator.userAgent || '');
+  const browser = /CriOS/.test(ua) ? 'Chrome iOS'
+    : /FxiOS/.test(ua) ? 'Firefox iOS'
+    : /Line/i.test(ua) ? 'LINE in-app'
+    : /Safari/.test(ua) && !/Chrome/.test(ua) ? 'Safari'
+    : /Chrome/.test(ua) ? 'Chrome'
+    : 'อื่น ๆ';
+  const os = /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+    : /Android/.test(ua) ? 'Android'
+    : /Windows/.test(ua) ? 'Windows'
+    : /Mac/.test(ua) ? 'macOS'
+    : 'อื่น ๆ';
+  const version = (ua.match(/OS (\d+[_\d]*)/) || ua.match(/Android (\d+[.\d]*)/) || [])[1] || '';
+  return `${os}${version ? ' ' + version.replace(/_/g, '.') : ''} · ${browser}`;
+}
+
+function formatApiDiagnostics(diag) {
+  const now = new Date();
+  const pad = value => String(value).padStart(2, '0');
+  const stamp = `${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const connection = navigator.connection || {};
+  const lines = [
+    `เวลา: ${stamp}`,
+    `เวอร์ชันแอป: ${CURRENT_VERSION}`,
+    `อุปกรณ์: ${describeDevice()}`,
+    `เครือข่าย: ${navigator.onLine === false ? 'ออฟไลน์' : 'ออนไลน์'}${connection.effectiveType ? ' · ' + connection.effectiveType : ''}`,
+    `เซิร์ฟเวอร์: ...${API_URL.slice(-16, -5)}`
+  ];
+
+  if (diag) {
+    lines.push(`คำสั่ง: ${diag.action}`);
+    if (diag.payloadKB >= 0) lines.push(`ขนาดข้อมูลที่ส่ง: ${diag.payloadKB} KB`);
+    lines.push(`ใช้เวลารวม: ${Math.round((Date.now() - diag.startedAt) / 100) / 10} วิ`);
+    lines.push('ผลแต่ละช่องทาง:');
+    if (diag.attempts.length) {
+      diag.attempts.forEach((attempt, index) => {
+        lines.push(`  ${index + 1}) ${attempt.transport} ${attempt.seconds} วิ — ${attempt.error}`);
+      });
+    } else {
+      lines.push('  (ไม่มีข้อมูล)');
+    }
+  }
+
+  if (currentUser?.id) lines.push(`ผู้ใช้: ${currentUser.id}`);
+  return lines.join('\n');
+}
+
+/**
+ * กล่องแจ้งเตือนมาตรฐาน: ข้อความสำหรับพนักงาน + ปุ่มกางรายละเอียดสำหรับผู้ดูแลระบบ
+ */
+function showApiErrorDialog({ title = 'บันทึกไม่สำเร็จ', text = '', diag = null } = {}) {
+  const details = formatApiDiagnostics(diag);
+  return Swal.fire({
+    icon: 'error',
+    title,
+    html: `
+      <p class="text-sm text-slate-600 leading-relaxed">${escapeHTML(text)}</p>
+      <button type="button" id="btnToggleDiag" class="mt-3 text-xs font-bold text-blue-600 underline">
+        <i class="fa-solid fa-circle-info mr-1"></i>ดูรายละเอียด (สำหรับผู้ดูแลระบบ)
+      </button>
+      <div id="diagPanel" class="hidden mt-2 text-left">
+        <pre id="diagText" class="whitespace-pre-wrap break-words bg-slate-900 text-slate-100 rounded-lg p-3 text-[11px] leading-snug max-h-56 overflow-auto select-all">${escapeHTML(details)}</pre>
+        <button type="button" id="btnCopyDiag" class="mt-2 w-full rounded-lg border border-slate-300 py-2 text-xs font-bold text-slate-600">
+          <i class="fa-regular fa-copy mr-1"></i>คัดลอกรายละเอียด
+        </button>
+        <p class="mt-1 text-[11px] text-slate-400">แคปหน้าจอส่วนนี้ส่งให้ผู้ดูแลระบบได้เลยค่ะ</p>
+      </div>`,
+    confirmButtonText: 'ตกลง',
+    confirmButtonColor: '#3b82f6',
+    didOpen: () => {
+      const toggle = document.getElementById('btnToggleDiag');
+      const panel = document.getElementById('diagPanel');
+      const copy = document.getElementById('btnCopyDiag');
+      if (toggle && panel) {
+        toggle.addEventListener('click', () => {
+          panel.classList.toggle('hidden');
+          toggle.innerHTML = panel.classList.contains('hidden')
+            ? '<i class="fa-solid fa-circle-info mr-1"></i>ดูรายละเอียด (สำหรับผู้ดูแลระบบ)'
+            : '<i class="fa-solid fa-circle-chevron-up mr-1"></i>ซ่อนรายละเอียด';
+        });
+      }
+      if (copy) {
+        copy.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(details);
+            copy.innerHTML = '<i class="fa-solid fa-check mr-1"></i>คัดลอกแล้ว';
+          } catch (error) {
+            copy.innerHTML = 'คัดลอกไม่ได้ — แคปหน้าจอแทนได้ค่ะ';
+          }
+        });
+      }
+    }
+  });
+}
+
 function buildDataApiUrl(action, payload = {}, attempt = 1) {
   const payloadStr = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
   return `${API_URL}?action=${encodeURIComponent(action)}&payload=${encodeURIComponent(payloadStr)}&attempt=${attempt}&_=${Date.now()}`;
 }
 
 async function callAPIGet(action, payload = {}) {
-  const maxAttempts = action === 'login' ? 3 : 2;
+  // คำสั่งเขียนข้อมูลยิงรอบเดียว ห้าม hedge ซ้อน — กันบันทึกแข่งกันเอง
+  const isMutation = !DATA_ACTIONS.includes(action);
+  const maxAttempts = isMutation ? 1 : (action === 'login' ? 3 : 2);
   // get_history ต้องจบเร็ว: หน้าลงเวลาการันตีรู้ผลรวมทุกชั้นภายใน 20 วิ (fetch ~10 วิ + JSONP ~10 วิ)
-  const attemptTimeout = action === 'get_attendance_photo' ? 18000 : (action === 'login' ? 9000 : (action === 'get_history' ? 7000 : 12000));
+  const attemptTimeout = isMutation ? 20000 : (action === 'get_attendance_photo' ? 18000 : (action === 'login' ? 9000 : (action === 'get_history' ? 7000 : 12000)));
   const hedgeDelay = action === 'get_attendance_photo' ? 4500 : (action === 'login' || action === 'get_history' ? 3000 : 4000);
   let settled = false;
   let launched = 0;
@@ -1151,8 +1279,10 @@ async function callAPI(action, payload = {}, silent = false) {
 
   if (!silent) showLoading(true);
   let lastPostError = null;
+  const diag = createApiDiagnostics(action, payload);
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    const attemptStartedAt = Date.now();
     try {
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 25000);
@@ -1165,16 +1295,18 @@ async function callAPI(action, payload = {}, silent = false) {
         body: JSON.stringify({ action, data: payload }),
         signal: controller.signal
       }).finally(() => clearTimeout(timeoutId));
-      
+
       if (!response.ok) {
         throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
       }
 
       const res = await response.json();
+      recordApiAttempt(diag, `POST #${attempt}`, attemptStartedAt, null);
       if (!silent) showLoading(false);
       return res;
     } catch (error) {
       lastPostError = error;
+      recordApiAttempt(diag, `POST #${attempt}`, attemptStartedAt, error);
       console.warn(`POST API Attempt ${attempt} failed (${action}):`, error);
       if (attempt === 1) {
         await new Promise(r => setTimeout(r, 1200));
@@ -1191,35 +1323,43 @@ async function callAPI(action, payload = {}, silent = false) {
     delete safePayload.selfie_base64;
     delete safePayload.photo;
     let getRes;
+    const getStartedAt = Date.now();
     try {
       getRes = await callAPIGet(action, safePayload);
+      recordApiAttempt(diag, 'GET', getStartedAt, null);
     } catch (getErr) {
       // WebKit บางเครื่องตัด fetch ทั้ง POST/GET (TypeError: Load failed) —
       // JSONP ผ่าน <script> ไม่ใช้ fetch จึงเป็นชั้นสุดท้ายที่มักรอด
+      recordApiAttempt(diag, 'GET', getStartedAt, getErr);
       console.warn(`Fallback GET to JSONP pipeline for (${action}):`, getErr);
+      const jsonpStartedAt = Date.now();
       getRes = await callAPIJsonp(action, safePayload, true);
+      recordApiAttempt(diag, 'JSONP', jsonpStartedAt, getRes?.success ? null : new Error(getRes?.message || 'ไม่สำเร็จ'));
     }
     if (!silent) showLoading(false);
     // ถ้าเป็น save_attendance → รูปจะหาย → เตือน user
     if (action === 'save_attendance' && getRes.success) {
       console.warn('⚠️ Attendance saved via GET fallback - photo may not be saved');
     }
+    if (getRes && !getRes.success) getRes.diag = diag;
     return getRes;
   } catch (fallbackErr) {
+    recordApiAttempt(diag, 'JSONP', Date.now(), fallbackErr);
     console.error(`API Error (${action}):`, lastPostError || fallbackErr);
     if (!silent) {
-      Swal.fire({
-        icon: 'error',
+      showApiErrorDialog({
         title: 'การเชื่อมต่อขัดข้อง',
-        text: 'ไม่สามารถส่งข้อมูลได้ กรุณาลองใหม่อีกครั้ง (อาจเกิดจากเครือข่ายอินเทอร์เน็ตไม่เสถียร)',
-        confirmButtonText: 'ตกลง',
-        confirmButtonColor: '#3b82f6'
+        text: 'ส่งข้อมูลไม่สำเร็จ กรุณาเช็กสัญญาณอินเทอร์เน็ตแล้วลองใหม่อีกครั้งค่ะ',
+        diag
       });
     }
     if (!silent) showLoading(false);
     // ห้ามโชว์ error ดิบของเบราว์เซอร์ (เช่น "Load failed") เดี่ยว ๆ — ผู้ใช้อ่านไม่รู้เรื่อง
-    const detail = lastPostError?.message || fallbackErr?.message || '';
-    return { success: false, message: 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ กรุณาเช็กอินเทอร์เน็ตแล้วลองใหม่อีกครั้งค่ะ' + (detail ? ` (${detail})` : '') };
+    return {
+      success: false,
+      message: 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ กรุณาเช็กอินเทอร์เน็ตแล้วลองใหม่อีกครั้งค่ะ',
+      diag
+    };
   }
 }
 
@@ -1228,8 +1368,11 @@ function callAPIJsonp(action, payload = {}, silent = false) {
     if (!silent) showLoading(true);
 
     const payloadStr = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
-    const maxAttempts = action === 'login' ? 3 : 2;
-    const attemptTimeout = action === 'get_attendance_photo' ? 30000 : (action === 'get_admin_data' || action === 'get_users' ? 25000 : (action === 'get_history' ? 7000 : (action === 'login' ? 10000 : 15000)));
+    // คำสั่งที่เขียนข้อมูล (save_attendance ฯลฯ) ห้ามยิงซ้อน — รอบสองจะไปชนแถวที่รอบแรก
+    // กำลังบันทึกอยู่ แล้วเด้ง "ลงเวลาครบแล้ว" ทั้งที่เพิ่งกดครั้งเดียว จึงให้ยิงรอบเดียวแต่รอนานขึ้น
+    const isMutation = !DATA_ACTIONS.includes(action);
+    const maxAttempts = isMutation ? 1 : (action === 'login' ? 3 : 2);
+    const attemptTimeout = isMutation ? 45000 : (action === 'get_attendance_photo' ? 30000 : (action === 'get_admin_data' || action === 'get_users' ? 25000 : (action === 'get_history' ? 7000 : (action === 'login' ? 10000 : 15000))));
     const hedgeDelay = action === 'get_attendance_photo' ? 8000 : (action === 'get_admin_data' || action === 'get_users' ? 15000 : (action === 'login' || action === 'get_history' ? 3000 : 8000));
     const loadingText = $('#loading-overlay p').text();
     let settled = false;
@@ -2268,12 +2411,10 @@ async function submitAttendance(status) {
         confirmButtonColor: '#3b82f6'
       });
     }
-    Swal.fire({
-      icon: 'error',
+    showApiErrorDialog({
       title: 'บันทึกไม่สำเร็จ',
       text: res.message || 'ระบบไม่สามารถบันทึกข้อมูลลงฐานข้อมูลได้ กรุณาลองใหม่อีกครั้ง หรือเช็กการเชื่อมต่ออินเทอร์เน็ตค่ะ',
-      confirmButtonText: 'ตกลง',
-      confirmButtonColor: '#3b82f6'
+      diag: res.diag
     });
   }
 }
