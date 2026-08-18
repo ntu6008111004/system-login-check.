@@ -49,7 +49,7 @@ function sanitizeLogData(data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.14";
+const APP_VERSION = "1.3.15";
 const SCHEMA_VERSION = "10";
 const CACHE_TTL = {
   master: 600,

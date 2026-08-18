@@ -242,6 +242,50 @@ test('ทุกช่องทางล้มหมด → ข้อความ
   assert.match(res.message, /เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ/, 'ต้องขึ้นข้อความภาษาไทยที่ผู้ใช้เข้าใจได้');
 });
 
+test('เวอร์ชันใหม่มาถึงเครื่อง → initApp ล้างแคชค้างของเวอร์ชันเก่าอัตโนมัติ (คง login ไว้)', () => {
+  const { evalIn } = loadApp();
+  evalIn(`
+    localStorage.setItem('cache_v3_get_history_abc', '{"data":1}');
+    localStorage.setItem('db_history_U001', 'x');
+    localStorage.setItem('attendance_foo', 'x');
+    localStorage.setItem('worklogs_user', '{"id":"U001"}');
+    localStorage.setItem('worklogs_purged_for_version', '0.0.0');
+    location.pathname = '/login.html';
+  `);
+
+  evalIn('initApp()');
+
+  assert.equal(evalIn(`localStorage.getItem('cache_v3_get_history_abc')`), null, 'cache ข้อมูลเก่าต้องถูกล้าง');
+  assert.equal(evalIn(`localStorage.getItem('db_history_U001')`), null);
+  assert.equal(evalIn(`localStorage.getItem('attendance_foo')`), null);
+  assert.equal(evalIn(`localStorage.getItem('worklogs_user')`), '{"id":"U001"}', 'ห้ามล้าง login session');
+  assert.equal(
+    evalIn(`localStorage.getItem('worklogs_purged_for_version')`),
+    evalIn('CURRENT_VERSION'),
+    'ต้องจดว่า purge ให้เวอร์ชันนี้แล้ว',
+  );
+
+  // เวอร์ชันเดิม → ห้าม purge ซ้ำ (กันล้าง cache ทุกครั้งที่เปิดแอป)
+  evalIn(`localStorage.setItem('cache_v3_get_history_abc', '{"data":2}')`);
+  assert.equal(evalIn('purgeIfVersionChanged()'), false);
+  assert.equal(evalIn(`localStorage.getItem('cache_v3_get_history_abc')`), '{"data":2}', 'เวอร์ชันไม่เปลี่ยนต้องไม่แตะ cache');
+});
+
+test('server มีเวอร์ชันใหม่ → ล้าง cache แล้ว reload ด้วย URL กันแคช', async () => {
+  const { evalIn } = loadApp();
+  evalIn(`
+    localStorage.setItem('cache_v3_get_history_abc', '{"data":1}');
+    __replaced = null;
+    location.replace = (url) => { __replaced = url; };
+    callAPI = async () => ({ success: true, version: '9.9.9' });
+  `);
+
+  await evalIn('checkAppVersion()');
+
+  assert.match(String(evalIn('__replaced')), /_v=999/, 'ต้อง reload ด้วย query กันแคชของเวอร์ชันใหม่');
+  assert.equal(evalIn(`localStorage.getItem('cache_v3_get_history_abc')`), null, 'ก่อน reload ต้องล้าง cache ข้อมูลเก่า');
+});
+
 test('เวอร์ชัน frontend/backend/index.html ต้องตรงกัน (กันแอปเก่าค้างในเบราว์เซอร์)', () => {
   const fs = require('node:fs');
   const path = require('node:path');

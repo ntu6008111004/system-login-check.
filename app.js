@@ -1,6 +1,11 @@
-// Web App deployment v68 (18/08/2026). Keep this in sync when a new deployment URL is created.
+// GAS Web App URL (deployment ID AKfycbzS... สร้างเมื่อ 18/08/2026)
+// ปล่อยเวอร์ชันใหม่: clasp push แล้ว `clasp update-deployment <id>` ทุก id แบบ in-place
+// URL เดิมได้โค้ดใหม่ทันที ห้ามสร้าง deployment ใหม่โดยไม่เปลี่ยน _u — เคยพลาดชี้ตัวเก่ามาแล้ว
 const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J6U2pyYUxCXy1ZMlYwYUZLUFF3WEZzQ0Y1SlpHZ0I2UXVpaEpKV3ExeldCa0JYZUM4VjZqUXc4MjR0N2FXZDlucFYvZXhlYw==';
 const API_URL = atob(_u);
+
+// เวอร์ชันของโค้ดชุดนี้ — ต้อง bump พร้อม APP_VERSION (apps-script.gs) และ ?v= (index.html/login.html) เสมอ
+const CURRENT_VERSION = "1.3.15";
 
 // System State
 let currentUser = null;
@@ -390,6 +395,9 @@ function handleLineBreakout() {
 }
 
 function initApp() {
+  // ต้องมาก่อนการอ่าน cache ใด ๆ — โค้ดเวอร์ชันใหม่เพิ่งมาถึงเครื่อง ให้ล้างของค้างของเวอร์ชันเก่าทิ้งก่อน
+  purgeIfVersionChanged();
+
   const isLoginPage = window.location.pathname.endsWith('login.html');
   const savedUser = localStorage.getItem('worklogs_user');
   
@@ -440,7 +448,6 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.14";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -460,12 +467,15 @@ async function checkAppVersion() {
                     // Give the user one clear, safe recovery action instead of
                     // leaving them to repeatedly refresh without a result.
                     clearInternalCache();
+                    await purgeBrowserLevelCaches();
                     window.setTimeout(() => showVersionRecovery(serverVersion), 250);
                     return;
                 }
 
-                // ล้าง cache ทุกกรณี เพื่อให้ผู้ใช้ได้ข้อมูลใหม่เสมอ
+                // ล้างทั้งข้อมูลภายในและแคชไฟล์ของเบราว์เซอร์ ก่อน reload
+                // เพื่อให้รอบใหม่ดึง HTML/JS สดจริง ไม่ใช่ไฟล์เก่าจาก Cache Storage
                 clearInternalCache();
+                await purgeBrowserLevelCaches();
 
                 // Force reload ทุก page (login และ index) เพื่อให้ JS ใหม่ถูกโหลด
                 // ใช้ timestamp เป็น query string เพื่อ bypass browser cache
@@ -481,14 +491,7 @@ async function forceAppRecovery() {
     clearInternalCache();
     localStorage.removeItem('worklogs_app_version');
     sessionStorage.removeItem('worklogs_version_recovery');
-    try {
-        if ('caches' in window) {
-            const keys = await window.caches.keys();
-            await Promise.all(keys.map(key => window.caches.delete(key)));
-        }
-    } catch (error) {
-        console.warn('Unable to clear browser cache storage:', error);
-    }
+    await purgeBrowserLevelCaches();
 
     const url = new URL(window.location.href);
     url.searchParams.set('reset', Date.now().toString());
@@ -677,6 +680,44 @@ function clearInternalCache() {
       localStorage.removeItem(key);
     }
   });
+}
+
+// 🧹 ล้างแคชระดับเบราว์เซอร์ (Cache Storage + service worker เก่า)
+// ไฟล์ HTML/JS/CSS ค้างจากเวอร์ชันก่อนคือต้นเหตุ "อัปเดตแล้วแต่เครื่องผู้ใช้ยังรันโค้ดเก่า"
+async function purgeBrowserLevelCaches() {
+  try {
+    if ('caches' in window) {
+      const keys = await window.caches.keys();
+      await Promise.all(keys.map(key => window.caches.delete(key)));
+    }
+  } catch (error) {
+    console.warn('Unable to clear browser cache storage:', error);
+  }
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(registration => registration.unregister()));
+    }
+  } catch (error) {
+    console.warn('Unable to unregister old service workers:', error);
+  }
+}
+
+// 🧹 รันครั้งแรกที่โค้ดเวอร์ชันใหม่มาถึงเครื่อง: เก็บกวาดข้อมูล/แคชค้างของเวอร์ชันก่อน
+// ล้างเฉพาะ cache ข้อมูล + แคชไฟล์ — คง login session (worklogs_user) ไว้เสมอ
+function purgeIfVersionChanged() {
+  const PURGED_KEY = 'worklogs_purged_for_version';
+  try {
+    if (localStorage.getItem(PURGED_KEY) === CURRENT_VERSION) return false;
+  } catch (error) {
+    return false;
+  }
+  clearInternalCache();
+  try { sessionStorage.removeItem('worklogs_version_recovery'); } catch (error) {}
+  purgeBrowserLevelCaches();
+  try { localStorage.setItem(PURGED_KEY, CURRENT_VERSION); } catch (error) {}
+  console.log(`🧹 ล้างแคชของเวอร์ชันเก่าเรียบร้อย (เวอร์ชันปัจจุบัน ${CURRENT_VERSION})`);
+  return true;
 }
 
 // Auto-refresh when user returns to the app (fixes stale state if left in background)
