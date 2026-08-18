@@ -1,5 +1,5 @@
-// Web App deployment v62 (18/08/2026). Keep this in sync when a new deployment URL is created.
-const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J5cU9WYWZyZnBqcWlqYkR4NDFPTUpXVUZ6TWNjaGpnSGJOUjF5SUp1RENGWjVaUnBNVmczZS1WZ05zcVpBZXFaVGsvZXhlYw==';
+// Web App deployment v66 (18/08/2026). Keep this in sync when a new deployment URL is created.
+const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J3VXdmSDBMMHltUHJRQk5OTExGNUtmSTNWbXhKTU1xbVBVU09jZWFCOXhITnZyRDVrRzNZbUtQUUhuNTZ5V3l3c00vZXhlYw==';
 const API_URL = atob(_u);
 
 // System State
