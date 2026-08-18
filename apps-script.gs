@@ -25,8 +25,26 @@ function logToSheet(action, type, data) {
     }
     const serialized = JSON.stringify(sanitizeLogData(data));
     logSheet.appendRow([new Date(), action, type, serialized.slice(0, 1000)]);
+    trimSheetGrid(logSheet, 1000);
   } catch (e) {
     // Fail silently in logs
+  }
+}
+
+/**
+ * ตัดแถวว่างส่วนเกินของ grid ทิ้ง — Google ขยาย grid เผื่อทีละหลายร้อย/พันแถว
+ * ต่อการเขียนหนึ่งครั้ง สะสมแล้วไฟล์บวมจนพัง (เกิดมาแล้วกับไฟล์ DB ตัวแรก:
+ * "document cannot be modified") จึงต้องเก็บกวาดทันทีที่เกินเกณฑ์ ขณะไฟล์ยังเล็ก
+ */
+function trimSheetGrid(sheet, extraRowsAllowed) {
+  try {
+    const keepRows = Math.max(sheet.getLastRow(), 1) + 100;
+    const maxRows = sheet.getMaxRows();
+    if (maxRows > keepRows + extraRowsAllowed) {
+      sheet.deleteRows(keepRows + 1, maxRows - keepRows);
+    }
+  } catch (e) {
+    // ห้ามให้งานเก็บกวาดทำ request หลักล้ม
   }
 }
 
@@ -54,7 +72,7 @@ function sanitizeLogData(data) {
 // ไฟล์ V2 (18/08/2026) — ไฟล์เดิม 1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8 เสียภายใน
 // (Google ปฏิเสธการเขียนแถวใหม่: "document cannot be modified") เก็บไว้เป็น archive อ่านอย่างเดียว
 const SPREADSHEET_ID = "16BKASaGtwEzgmU9yGyFm8XhVLPhK_yUzmfHmTqT-FTA";
-const APP_VERSION = "1.3.17";
+const APP_VERSION = "1.3.18";
 const SCHEMA_VERSION = "10";
 // จำนวนแถวท้ายชีทที่อ่านเพื่อกันลงเวลาซ้ำ — พนักงาน ~22 คน = ~44 แถว/วัน จึงครอบคลุมย้อนหลังกว่า 10 วัน
 const GUARD_SCAN_ROWS = 500;
@@ -1221,6 +1239,8 @@ function saveAttendance(p) {
   } finally {
     if (lockAcquired) lock.releaseLock();
   }
+  // นอก lock เสมอ — เก็บกวาด grid ที่ Google ขยายเผื่อเกินจำเป็น กันไฟล์บวมสะสม
+  trimSheetGrid(sheet, 2000);
   clearScriptCache(["db_history_" + p.user_id]);
   bumpDataVersion("attendance");
   return { success: true };

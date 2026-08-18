@@ -98,6 +98,29 @@ test('saveAttendance: ถ้า lock ไม่ว่างต้องตอบ�
   assert.equal(env.lockOps.release, 0, 'ห้าม release lock ที่ยังไม่ได้รับ');
 });
 
+test('REGRESSION: grid ว่างที่ Google ขยายเผื่อ ต้องถูกตัดทิ้งอัตโนมัติหลังบันทึกเวลา', () => {
+  const env = seededEnv();
+  // จำลองไฟล์ที่ Google ขยาย grid เผื่อไว้ 5,000 แถวว่าง (อาการก่อนไฟล์ DB ตัวแรกพัง)
+  env.attendance.sheet.__extraGridRows = 5000;
+
+  const res = env.call('saveAttendance', {
+    user_id: 'U002', status: 'เข้างาน',
+    latitude: 17.4, longitude: 102.8, location_name: 'อุดรธานี',
+    selfie_base64: 'S'.repeat(500),
+  });
+  assert.equal(res.success, true);
+  assert.ok(env.attendance.calls.deleteRows.length >= 1, 'ต้องเรียก deleteRows เก็บกวาด grid');
+  assert.ok(env.attendance.sheet.getMaxRows() <= env.attendance.sheet.getLastRow() + 100 + 2000,
+    'grid หลังเก็บกวาดต้องไม่บวมเกินเกณฑ์');
+});
+
+test('trimSheetGrid: grid ไม่บวมต้องไม่แตะชีทเลย (ไม่เสียเวลา request ปกติ)', () => {
+  const env = seededEnv();
+  env.attendance.sheet.__extraGridRows = 50; // เผื่อนิดหน่อย ยังไม่ถึงเกณฑ์
+  env.call('trimSheetGrid', env.attendance.sheet, 2000);
+  assert.equal(env.attendance.calls.deleteRows.length, 0, 'ต่ำกว่าเกณฑ์ห้ามลบ');
+});
+
 test('sanitizeLogData: ห้ามเก็บภาพหรือรหัสผ่านลง SYS_LOG', () => {
   const env = seededEnv();
   const photo = 'data:image/jpeg;base64,' + 'A'.repeat(50000);

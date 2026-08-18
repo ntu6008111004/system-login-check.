@@ -27,11 +27,13 @@ function formatDateLike(date, fmt) {
 
 function createMockSheet(name, rows) {
   const data = rows.map((r) => r.slice());
-  const calls = { getRange: [], getDataRange: 0, setValues: [], appendRow: 0 };
-
+  const calls = { getRange: [], getDataRange: 0, setValues: [], appendRow: 0, deleteRows: [] };
+  // จำลอง grid ว่างส่วนเกินที่ Google ขยายเผื่อ (ตั้งค่าจากเทสต์ผ่าน sheet.__extraGridRows)
   const sheet = {
+    __extraGridRows: 0,
     getName: () => name,
     getLastRow: () => data.length,
+    getMaxRows: () => data.length + sheet.__extraGridRows,
     getLastColumn: () => (data[0] ? data[0].length : 0),
     getDataRange() {
       calls.getDataRange += 1;
@@ -43,7 +45,12 @@ function createMockSheet(name, rows) {
     },
     appendRow(row) { calls.appendRow += 1; data.push(row.slice()); },
     insertColumnAfter: () => {},
-    deleteRows: () => {},
+    deleteRows: (start, count) => {
+      calls.deleteRows.push({ start, count });
+      const contentDeleted = Math.max(0, Math.min(data.length - (start - 1), count));
+      if (contentDeleted > 0) data.splice(start - 1, contentDeleted);
+      sheet.__extraGridRows = Math.max(0, sheet.__extraGridRows - (count - contentDeleted));
+    },
   };
 
   function makeRange(row, col, numRows, numCols) {
