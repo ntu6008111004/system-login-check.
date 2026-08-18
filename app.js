@@ -1,5 +1,5 @@
-// Web App deployment v66 (18/08/2026). Keep this in sync when a new deployment URL is created.
-const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J3VXdmSDBMMHltUHJRQk5OTExGNUtmSTNWbXhKTU1xbVBVU09jZWFCOXhITnZyRDVrRzNZbUtQUUhuNTZ5V3l3c00vZXhlYw==';
+// Web App deployment v68 (18/08/2026). Keep this in sync when a new deployment URL is created.
+const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J6U2pyYUxCXy1ZMlYwYUZLUFF3WEZzQ0Y1SlpHZ0I2UXVpaEpKV3ExeldCa0JYZUM4VjZqUXc4MjR0N2FXZDlucFYvZXhlYw==';
 const API_URL = atob(_u);
 
 // System State
@@ -440,7 +440,7 @@ function initApp() {
 }
 
 async function checkAppVersion() {
-    const CURRENT_VERSION = "1.3.13";
+    const CURRENT_VERSION = "1.3.14";
     const res = await callAPI('get_version', {}, true);
     
     if (res.success && res.version) {
@@ -1149,7 +1149,15 @@ async function callAPI(action, payload = {}, silent = false) {
     delete safePayload.selfie;
     delete safePayload.selfie_base64;
     delete safePayload.photo;
-    const getRes = await callAPIGet(action, safePayload);
+    let getRes;
+    try {
+      getRes = await callAPIGet(action, safePayload);
+    } catch (getErr) {
+      // WebKit บางเครื่องตัด fetch ทั้ง POST/GET (TypeError: Load failed) —
+      // JSONP ผ่าน <script> ไม่ใช้ fetch จึงเป็นชั้นสุดท้ายที่มักรอด
+      console.warn(`Fallback GET to JSONP pipeline for (${action}):`, getErr);
+      getRes = await callAPIJsonp(action, safePayload, true);
+    }
     if (!silent) showLoading(false);
     // ถ้าเป็น save_attendance → รูปจะหาย → เตือน user
     if (action === 'save_attendance' && getRes.success) {
@@ -1168,7 +1176,9 @@ async function callAPI(action, payload = {}, silent = false) {
       });
     }
     if (!silent) showLoading(false);
-    return { success: false, message: lastPostError?.message || fallbackErr?.message || 'บันทึกไม่สำเร็จ' };
+    // ห้ามโชว์ error ดิบของเบราว์เซอร์ (เช่น "Load failed") เดี่ยว ๆ — ผู้ใช้อ่านไม่รู้เรื่อง
+    const detail = lastPostError?.message || fallbackErr?.message || '';
+    return { success: false, message: 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ กรุณาเช็กอินเทอร์เน็ตแล้วลองใหม่อีกครั้งค่ะ' + (detail ? ` (${detail})` : '') };
   }
 }
 

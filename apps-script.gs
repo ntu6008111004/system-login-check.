@@ -5,7 +5,7 @@
 function logToSheet(action, type, data) {
   // Skip verbose read actions.  Mutation logs are useful when investigating
   // failed clock-outs, but must never contain photos, passwords or profiles.
-  const skipActions = ["get_admin_data", "get_attendance_photo", "get_history", "get_users", "get_branches", "get_update_notice", "get_version", "reverse_geocode", "login"];
+  const skipActions = ["get_admin_data", "get_attendance_photo", "get_history", "get_users", "get_branches", "get_update_notice", "get_version", "reverse_geocode", "login", "clean_sys_log"];
   if (skipActions.includes(action)) return;
 
   try {
@@ -14,13 +14,14 @@ function logToSheet(action, type, data) {
     if (!logSheet) {
       logSheet = ss.insertSheet("SYS_LOG");
       logSheet.appendRow(["Timestamp", "Action", "Type", "Data"]);
+    } else {
+      const lastRow = logSheet.getLastRow();
+      if (lastRow > 50) {
+        logSheet.deleteRows(2, lastRow - 50);
+      }
     }
-    // A checkout request previously wrote the same Base64 selfie twice
-    // (selfie_base64 + selfie) to SYS_LOG.  That made a single log row very
-    // large, slowed concurrent writes, and could exceed the Sheets cell size
-    // limit.  Keep only safe, bounded diagnostics in the operational log.
     const serialized = JSON.stringify(sanitizeLogData(data));
-    logSheet.appendRow([new Date(), action, type, serialized.slice(0, 45000)]);
+    logSheet.appendRow([new Date(), action, type, serialized.slice(0, 1000)]);
   } catch (e) {
     // Fail silently in logs
   }
@@ -48,7 +49,7 @@ function sanitizeLogData(data) {
 }
 
 const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.13";
+const APP_VERSION = "1.3.14";
 const SCHEMA_VERSION = "10";
 const CACHE_TTL = {
   master: 600,
@@ -175,6 +176,8 @@ function handleAction(action, data) {
   else if (action === "get_update_notice") result = getUpdateNotice(data.role || "user");
   else if (action === "reverse_geocode") result = reverseGeocodeLocation(data.latitude, data.longitude);
   else if (action === "reset_all_passwords") result = resetAllPasswords();
+  else if (action === "clean_sys_log") result = cleanSysLog();
+  else if (action === "migrate_db") result = migrateDatabase();
   else result = { success: false, code: "UNKNOWN_ACTION", message: "Unknown action: " + action };
 
   if (result && typeof result === "object") {
@@ -737,6 +740,53 @@ function resetAllPasswords() {
   
   invalidateUsersCache();
   return { success: true, message: "รีเซ็ตรหัสพนักงานทุกคนเป็น 1234 เรียบร้อยแล้ว" };
+}
+
+function cleanSysLog() {
+  try {
+    const ss = getSpreadsheet();
+    let logSheet = ss.getSheetByName("SYS_LOG");
+    if (logSheet && logSheet.getLastRow() > 10) {
+      logSheet.deleteRows(2, logSheet.getLastRow() - 10);
+    }
+    return { success: true, message: "SYS_LOG pruned" };
+  } catch (e) {
+    return { success: false, message: e.toString() };
+  }
+}
+
+function migrateDatabase() {
+  try {
+    const oldSs = getSpreadsheet();
+    const newSs = SpreadsheetApp.create("WorkLogs_Database_V2");
+    const sheetNames = ["USERS", "ATTENDANCE", "BRANCHES", "APP_UPDATES"];
+    
+    sheetNames.forEach(function(name) {
+      const srcSheet = oldSs.getSheetByName(name);
+      if (!srcSheet) return;
+      let targetSheet = newSs.getSheetByName(name);
+      if (!targetSheet) {
+        targetSheet = newSs.insertSheet(name);
+      }
+      const lastRow = srcSheet.getLastRow();
+      const lastCol = srcSheet.getLastColumn();
+      if (lastRow > 0 && lastCol > 0) {
+        const values = srcSheet.getRange(1, 1, lastRow, lastCol).getValues();
+        targetSheet.getRange(1, 1, lastRow, lastCol).setValues(values);
+      }
+    });
+
+    const defaultSheet = newSs.getSheetByName("Sheet1");
+    if (defaultSheet) newSs.deleteSheet(defaultSheet);
+
+    return {
+      success: true,
+      new_spreadsheet_id: newSs.getId(),
+      url: newSs.getUrl()
+    };
+  } catch (e) {
+    return { success: false, message: e.toString() };
+  }
 }
 
 function compactLocationPart(value, prefix) {

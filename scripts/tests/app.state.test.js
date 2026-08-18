@@ -212,6 +212,36 @@ test('ออกงาน: ส่งรูปเพียงฟิลด์เด
   assert.equal(evalIn('__resetDashboardCalled'), true, 'retry สำเร็จต้องจบกระบวนการออกงานตามปกติ');
 });
 
+test('REGRESSION: POST และ GET fetch ล้มหมด ("Load failed") → ต้อง fallback JSONP โดยตัดรูปออก', async () => {
+  const { evalIn } = loadApp();
+  // fetch ใน harness reject เสมอ = จำลอง WebKit ตัดทุก fetch (TypeError: Load failed)
+  evalIn(`
+    __jsonpCalls = [];
+    callAPIJsonp = async (action, payload, silent) => {
+      __jsonpCalls.push({ action, payload, silent });
+      return { success: true };
+    };
+  `);
+
+  const res = await evalIn(`callAPI('save_attendance', { user_id: 'U001', status: 'ออกงาน', selfie_base64: 'data:image/jpeg;base64,XXXX' }, true)`);
+  assert.equal(res.success, true, 'JSONP สำเร็จต้องนับเป็นบันทึกสำเร็จ');
+
+  const calls = evalIn('JSON.parse(JSON.stringify(__jsonpCalls))');
+  assert.equal(calls.length, 1, 'fetch ล้มหมดต้องลอง JSONP หนึ่งครั้ง');
+  assert.equal(calls[0].action, 'save_attendance');
+  assert.equal(calls[0].payload.user_id, 'U001');
+  assert.ok(!Object.hasOwn(calls[0].payload, 'selfie_base64'), 'JSONP fallback ห้ามพก base64 รูปใน URL');
+});
+
+test('ทุกช่องทางล้มหมด → ข้อความ error ต้องเป็นภาษาไทย ไม่ใช่ error ดิบของเบราว์เซอร์', async () => {
+  const { evalIn } = loadApp();
+  evalIn(`callAPIJsonp = async () => { throw new Error('Load failed'); }`);
+
+  const res = await evalIn(`callAPI('save_attendance', { user_id: 'U001' }, true)`);
+  assert.equal(res.success, false);
+  assert.match(res.message, /เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ/, 'ต้องขึ้นข้อความภาษาไทยที่ผู้ใช้เข้าใจได้');
+});
+
 test('เวอร์ชัน frontend/backend/index.html ต้องตรงกัน (กันแอปเก่าค้างในเบราว์เซอร์)', () => {
   const fs = require('node:fs');
   const path = require('node:path');
