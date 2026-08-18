@@ -5,7 +5,7 @@ const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J6U2pyYUxCXy1Z
 const API_URL = atob(_u);
 
 // เวอร์ชันของโค้ดชุดนี้ — ต้อง bump พร้อม APP_VERSION (apps-script.gs) และ ?v= (index.html/login.html) เสมอ
-const CURRENT_VERSION = "1.3.16";
+const CURRENT_VERSION = "1.3.17";
 
 // System State
 let currentUser = null;

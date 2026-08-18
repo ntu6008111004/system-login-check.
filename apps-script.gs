@@ -19,13 +19,9 @@ function logToSheet(action, type, data) {
       if (lastRow > 50) {
         logSheet.deleteRows(2, lastRow - 50);
       }
-      // ชีทนี้เคยบวมถึง ~2.4 ล้านช่องจากแถวว่างที่ค้างใน grid (เนื้อหาจริง 50 แถว)
-      // เก็บกวาดครั้งเดียวเมื่อพบว่าบวม — รอบถัดไปเงื่อนไขนี้จะไม่จริงอีก
-      const maxRows = logSheet.getMaxRows();
-      const keepRows = Math.max(logSheet.getLastRow(), 1) + 100;
-      if (maxRows > keepRows + 1000) {
-        logSheet.deleteRows(keepRows + 1, maxRows - keepRows);
-      }
+      // ห้ามตัดแถวว่างของ grid ตรงนี้ — ชีทที่บวมมากทำให้ deleteRows ก้อนใหญ่โดน
+      // "document cannot be modified" ทุกครั้ง เสียเวลาแล้วยังทำ log หาย
+      // งานเก็บกวาด grid เป็นหน้าที่ของ clean_sys_log (เรียกเป็นครั้งคราว) เท่านั้น
     }
     const serialized = JSON.stringify(sanitizeLogData(data));
     logSheet.appendRow([new Date(), action, type, serialized.slice(0, 1000)]);
@@ -55,8 +51,10 @@ function sanitizeLogData(data) {
   return safe;
 }
 
-const SPREADSHEET_ID = "1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8";
-const APP_VERSION = "1.3.16";
+// ไฟล์ V2 (18/08/2026) — ไฟล์เดิม 1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8 เสียภายใน
+// (Google ปฏิเสธการเขียนแถวใหม่: "document cannot be modified") เก็บไว้เป็น archive อ่านอย่างเดียว
+const SPREADSHEET_ID = "16BKASaGtwEzgmU9yGyFm8XhVLPhK_yUzmfHmTqT-FTA";
+const APP_VERSION = "1.3.17";
 const SCHEMA_VERSION = "10";
 // จำนวนแถวท้ายชีทที่อ่านเพื่อกันลงเวลาซ้ำ — พนักงาน ~22 คน = ~44 แถว/วัน จึงครอบคลุมย้อนหลังกว่า 10 วัน
 const GUARD_SCAN_ROWS = 500;
@@ -187,7 +185,7 @@ function handleAction(action, data) {
   else if (action === "reset_all_passwords") result = resetAllPasswords();
   else if (action === "clean_sys_log") result = cleanSysLog();
   else if (action === "diag_attendance") result = diagAttendance();
-  else if (action === "migrate_db") result = migrateDatabase();
+  else if (action === "migrate_db") result = migrateDatabase(data);
   else result = { success: false, code: "UNKNOWN_ACTION", message: "Unknown action: " + action };
 
   if (result && typeof result === "object") {
@@ -753,32 +751,46 @@ function resetAllPasswords() {
 }
 
 function cleanSysLog() {
+  const trimmed = [];
   try {
     const ss = getSpreadsheet();
-    const trimmed = [];
-    const logSheet = ss.getSheetByName("SYS_LOG");
-    if (logSheet && logSheet.getLastRow() > 10) {
-      logSheet.deleteRows(2, logSheet.getLastRow() - 10);
+    let logSheet = ss.getSheetByName("SYS_LOG");
+    if (logSheet) {
+      const logCells = logSheet.getMaxRows() * logSheet.getMaxColumns();
+      if (logCells > 100000) {
+        // ชีท log เคยบวมจน deleteRows ก้อนใหญ่โดน "document cannot be modified"
+        // — เนื้อหาใน log ทิ้งได้ทั้งหมด จึงลบทั้งชีทแล้วสร้างใหม่แทน (เร็วและผ่านเสมอ)
+        ss.deleteSheet(logSheet);
+        logSheet = ss.insertSheet("SYS_LOG");
+        logSheet.appendRow(["Timestamp", "Action", "Type", "Data"]);
+        trimmed.push("SYS_LOG: recreated (-" + logCells + " cells)");
+      } else if (logSheet.getLastRow() > 10) {
+        logSheet.deleteRows(2, logSheet.getLastRow() - 10);
+      }
     }
-    // ตัดแถว/คอลัมน์ว่างที่ค้างใน grid ของทุกชีท — ของว่างพวกนี้กินโควตาเซลล์
-    // และทำให้ทั้งไฟล์อืดโดยไม่มีข้อมูลจริงอยู่เลย
+    // ตัดแถวว่างที่ค้างใน grid ของชีทข้อมูลจริง — ลบท้ายชีททีละก้อนเล็ก
+    // เพราะก้อนใหญ่เกินไปจะโดน "document cannot be modified"
     ss.getSheets().forEach(function (sheet) {
+      if (sheet.getName() === "SYS_LOG") return;
       const keepRows = Math.max(sheet.getLastRow(), 1) + 100;
-      const maxRows = sheet.getMaxRows();
-      if (maxRows > keepRows) {
-        sheet.deleteRows(keepRows + 1, maxRows - keepRows);
-        trimmed.push(sheet.getName() + ": -" + (maxRows - keepRows) + " rows");
+      let maxRows = sheet.getMaxRows();
+      let removedRows = 0;
+      for (let batch = 0; batch < 40 && maxRows > keepRows; batch++) {
+        const deleteCount = Math.min(maxRows - keepRows, 5000);
+        try {
+          sheet.deleteRows(maxRows - deleteCount + 1, deleteCount);
+        } catch (e) {
+          trimmed.push(sheet.getName() + ": หยุดที่ " + e.toString());
+          return;
+        }
+        removedRows += deleteCount;
+        maxRows = sheet.getMaxRows();
       }
-      const keepColumns = Math.max(sheet.getLastColumn(), 1) + 2;
-      const maxColumns = sheet.getMaxColumns();
-      if (maxColumns > keepColumns) {
-        sheet.deleteColumns(keepColumns + 1, maxColumns - keepColumns);
-        trimmed.push(sheet.getName() + ": -" + (maxColumns - keepColumns) + " columns");
-      }
+      if (removedRows > 0) trimmed.push(sheet.getName() + ": -" + removedRows + " rows");
     });
-    return { success: true, message: "SYS_LOG pruned", trimmed: trimmed };
+    return { success: true, message: "database compacted", trimmed: trimmed };
   } catch (e) {
-    return { success: false, message: e.toString() };
+    return { success: false, message: e.toString(), trimmed: trimmed };
   }
 }
 
@@ -849,34 +861,97 @@ function diagAttendance() {
   }
 }
 
-function migrateDatabase() {
+/**
+ * ย้ายฐานข้อมูลไปไฟล์ใหม่แบบทีละก้อน (ไฟล์เดิมเสียภายในจน Google ปฏิเสธการเขียน
+ * แถวใหม่ลง ATTENDANCE — "document cannot be modified")
+ * เรียกครั้งแรกโดยไม่ส่ง target_id: สร้างไฟล์ + คัดลอกชีทเล็กทั้งหมด + หัวตาราง ATTENDANCE
+ * เรียกซ้ำพร้อม target_id + start_row: คัดลอก ATTENDANCE ทีละ batch จนจบ (กัน timeout
+ * เพราะคอลัมน์ selfie แถวละ ~45KB) — ไฟล์เดิมไม่ถูกแก้ไขใด ๆ เก็บเป็น archive
+ */
+function migrateDatabase(p) {
+  p = p || {};
+  // Google จำกัด 50,000 อักขระ/เซลล์ — ไฟล์เดิมมีเซลล์ที่เกิน (เช่นรูปโปรไฟล์เก่า)
+  // จึงต้อง clamp ระหว่างคัดลอก ไม่งั้น setValues ทั้งก้อนล้ม
+  const clampCells = function (rows) {
+    return rows.map(function (row) {
+      return row.map(function (value) {
+        return typeof value === "string" && value.length > 49000 ? value.slice(0, 49000) : value;
+      });
+    });
+  };
   try {
     const oldSs = getSpreadsheet();
-    const newSs = SpreadsheetApp.create("WorkLogs_Database_V2");
-    const sheetNames = ["USERS", "ATTENDANCE", "BRANCHES", "APP_UPDATES"];
-    
-    sheetNames.forEach(function(name) {
-      const srcSheet = oldSs.getSheetByName(name);
-      if (!srcSheet) return;
-      let targetSheet = newSs.getSheetByName(name);
-      if (!targetSheet) {
-        targetSheet = newSs.insertSheet(name);
-      }
-      const lastRow = srcSheet.getLastRow();
-      const lastCol = srcSheet.getLastColumn();
-      if (lastRow > 0 && lastCol > 0) {
-        const values = srcSheet.getRange(1, 1, lastRow, lastCol).getValues();
-        targetSheet.getRange(1, 1, lastRow, lastCol).setValues(values);
-      }
-    });
+    const batchSize = Math.max(1, Math.min(Number(p.batch_size) || 100, 500));
 
-    const defaultSheet = newSs.getSheetByName("Sheet1");
-    if (defaultSheet) newSs.deleteSheet(defaultSheet);
+    if (!p.target_id) {
+      // กันสร้างไฟล์ซ้ำโดยไม่ตั้งใจ (เช่น payload เพี้ยนจน target_id หาย):
+      // การสร้างไฟล์ใหม่ต้องยืนยันด้วย confirm_create เท่านั้น
+      if (p.confirm_create !== "new") {
+        return { success: false, message: "ต้องส่ง confirm_create:'new' เพื่อสร้างไฟล์ใหม่ หรือส่ง target_id เพื่อคัดลอกต่อ" };
+      }
+      const newSs = SpreadsheetApp.create("WorkLogs_Database_V2");
+      ["USERS", "BRANCHES", "APP_UPDATES"].forEach(function (name) {
+        const srcSheet = oldSs.getSheetByName(name);
+        if (!srcSheet) return;
+        const targetSheet = newSs.insertSheet(name);
+        const lastRow = srcSheet.getLastRow();
+        const lastCol = srcSheet.getLastColumn();
+        if (lastRow > 0 && lastCol > 0) {
+          try {
+            targetSheet
+              .getRange(1, 1, lastRow, lastCol)
+              .setValues(clampCells(srcSheet.getRange(1, 1, lastRow, lastCol).getValues()));
+          } catch (copyError) {
+            throw new Error("คัดลอกชีท " + name + " ล้มเหลว: " + copyError);
+          }
+        }
+      });
 
+      const srcAtt = oldSs.getSheetByName("ATTENDANCE");
+      const attSheet = newSs.insertSheet("ATTENDANCE");
+      if (srcAtt && srcAtt.getLastColumn() > 0) {
+        attSheet
+          .getRange(1, 1, 1, srcAtt.getLastColumn())
+          .setValues(srcAtt.getRange(1, 1, 1, srcAtt.getLastColumn()).getValues());
+      }
+
+      const defaultSheet = newSs.getSheetByName("Sheet1");
+      if (defaultSheet) newSs.deleteSheet(defaultSheet);
+
+      return {
+        success: true,
+        phase: "created",
+        new_spreadsheet_id: newSs.getId(),
+        url: newSs.getUrl(),
+        attendance_total_rows: srcAtt ? Math.max(0, srcAtt.getLastRow() - 1) : 0,
+        next_row: 2,
+      };
+    }
+
+    const newSs = SpreadsheetApp.openById(String(p.target_id));
+    const srcAtt = oldSs.getSheetByName("ATTENDANCE");
+    const dstAtt = newSs.getSheetByName("ATTENDANCE");
+    if (!srcAtt || !dstAtt) return { success: false, message: "ไม่พบชีท ATTENDANCE" };
+
+    const totalLastRow = srcAtt.getLastRow();
+    const startRow = Math.max(2, Number(p.start_row) || 2);
+    if (startRow > totalLastRow) {
+      return { success: true, phase: "done", copied_through: totalLastRow, next_row: null };
+    }
+
+    const rowCount = Math.min(batchSize, totalLastRow - startRow + 1);
+    const colCount = srcAtt.getLastColumn();
+    const values = clampCells(srcAtt.getRange(startRow, 1, rowCount, colCount).getValues());
+    dstAtt.getRange(startRow, 1, rowCount, colCount).setValues(values);
+    SpreadsheetApp.flush();
+
+    const nextRow = startRow + rowCount;
     return {
       success: true,
-      new_spreadsheet_id: newSs.getId(),
-      url: newSs.getUrl()
+      phase: nextRow > totalLastRow ? "done" : "copying",
+      copied_through: nextRow - 1,
+      total_last_row: totalLastRow,
+      next_row: nextRow > totalLastRow ? null : nextRow,
     };
   } catch (e) {
     return { success: false, message: e.toString() };
