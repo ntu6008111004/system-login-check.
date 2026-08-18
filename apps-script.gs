@@ -184,6 +184,8 @@ function handleAction(action, data) {
   else if (action === "reverse_geocode") result = reverseGeocodeLocation(data.latitude, data.longitude);
   else if (action === "reset_all_passwords") result = resetAllPasswords();
   else if (action === "clean_sys_log") result = cleanSysLog();
+  else if (action === "add_update_notice") result = addUpdateNotice(data);
+  else if (action === "delete_test_attendance") result = deleteTestAttendance(data);
   else if (action === "diag_attendance") result = diagAttendance();
   else if (action === "migrate_db") result = migrateDatabase(data);
   else result = { success: false, code: "UNKNOWN_ACTION", message: "Unknown action: " + action };
@@ -614,6 +616,68 @@ function getUpdateNotice(role) {
     return { success: true, update: update };
   }
   return { success: true, update: null };
+}
+
+/**
+ * เพิ่มประกาศอัปเดตลงชีท APP_UPDATES ผ่าน API (ใช้ตอนปล่อยเวอร์ชันใหม่)
+ * items คั่นหัวข้อด้วย | — แถวใหม่จะกลายเป็นประกาศล่าสุดของ audience นั้นทันที
+ */
+function addUpdateNotice(p) {
+  p = p || {};
+  const version = String(p.version || APP_VERSION).trim();
+  const audience = String(p.audience || "all").trim().toLowerCase();
+  const title = String(p.title || "").trim();
+  const items = String(p.items || "").trim();
+  if (!title || !items) return { success: false, message: "ต้องระบุ title และ items" };
+  const sheet = getSpreadsheet().getSheetByName("APP_UPDATES");
+  if (!sheet) return { success: false, message: "ไม่พบชีท APP_UPDATES" };
+  const date = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
+  sheet.appendRow([version, date, audience, title, items, "TRUE"]);
+  clearScriptCache([
+    "update_notice_v2_user_v" + APP_VERSION,
+    "update_notice_v2_admin_v" + APP_VERSION,
+  ]);
+  return { success: true, message: "เพิ่มประกาศอัปเดตแล้ว", version: version, audience: audience };
+}
+
+/**
+ * ลบเฉพาะแถวลงเวลาที่มาจากการทดสอบระบบอัตโนมัติ (location ขึ้นต้น "ทดสอบระบบอัตโนมัติ")
+ * ของ user ที่ระบุ — แถวลงเวลาจริงของพนักงานไม่มีทางโดนลบจาก action นี้
+ */
+function deleteTestAttendance(p) {
+  p = p || {};
+  const userId = String(p.user_id || "").trim();
+  if (!userId) return { success: false, message: "ต้องระบุ user_id" };
+  const sheet = getSpreadsheet().getSheetByName("ATTENDANCE");
+  if (!sheet || sheet.getLastRow() < 2) return { success: true, deleted: 0 };
+
+  const headers = getHeaders(sheet).map(function (h) { return String(h).toLowerCase(); });
+  const userIndex = headers.indexOf("user_id");
+  const locationIndex = headers.indexOf("location_name");
+  if (userIndex < 0 || locationIndex < 0) return { success: false, message: "ไม่พบคอลัมน์ที่ต้องใช้" };
+
+  const lastRow = sheet.getLastRow();
+  const firstColumn = Math.min(userIndex, locationIndex);
+  const lastColumn = Math.max(userIndex, locationIndex);
+  const values = sheet
+    .getRange(2, firstColumn + 1, lastRow - 1, lastColumn - firstColumn + 1)
+    .getDisplayValues();
+
+  let deleted = 0;
+  for (let i = values.length - 1; i >= 0; i--) {
+    const rowUser = String(values[i][userIndex - firstColumn]);
+    const rowLocation = String(values[i][locationIndex - firstColumn]);
+    if (rowUser === userId && rowLocation.indexOf("ทดสอบระบบอัตโนมัติ") === 0) {
+      sheet.deleteRow(i + 2);
+      deleted += 1;
+    }
+  }
+
+  if (deleted > 0) {
+    clearScriptCache(["db_history_" + userId]);
+    bumpDataVersion("attendance");
+  }
+  return { success: true, deleted: deleted };
 }
 
 function getBranches() {
