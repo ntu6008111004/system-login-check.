@@ -5,7 +5,7 @@ const _u = 'aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J6U2pyYUxCXy1Z
 const API_URL = atob(_u);
 
 // เวอร์ชันของโค้ดชุดนี้ — ต้อง bump พร้อม APP_VERSION (apps-script.gs) และ ?v= (index.html/login.html) เสมอ
-const CURRENT_VERSION = "1.3.18";
+const CURRENT_VERSION = "1.3.19";
 
 // System State
 let currentUser = null;
@@ -22,6 +22,8 @@ let marker = null;
 let isLocationReady = false;
 let hasCheckedInToday = false;
 let hasCheckedOutToday = false;
+let todayCheckInAt = null;   // ค่า date ดิบของ "เข้างาน" ครั้งแรกของวันนี้
+let todayCheckOutAt = null;  // ค่า date ดิบของ "ออกงาน" ครั้งล่าสุดของวันนี้
 let isAttendanceStatusResolved = false;
 let attendanceStatusFailed = false;
 let currentView = 'login';
@@ -127,26 +129,77 @@ let adminBaseDataset = { key: '', records: [], complete: false };
 const ADMIN_PREFETCH_ROWS = 50;
 
 // Utility
+/**
+ * แปลงค่าวันเวลาจากหลังบ้านให้เป็น Date object
+ * รองรับข้อมูลเก่าที่เลขไม่เติมศูนย์ด้วย ("18/8/2026", "19/08/2026 8:58:07")
+ * ซึ่งของเดิมอ่านไม่ออกแล้วคืนสตริงดิบออกจอ
+ */
+const parseRecordDate = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+
+    const text = String(value).trim();
+    if (!text) return null;
+
+    // รูปแบบไทย: D/M/YYYY หรือ DD/MM/YYYY HH:MM[:SS] (ไม่เติมศูนย์ก็อ่านได้)
+    const thai = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+    if (thai) {
+        const [, d, mo, y, hh = 0, mi = 0, ss = 0] = thai;
+        const date = new Date(Number(y), Number(mo) - 1, Number(d), Number(hh), Number(mi), Number(ss));
+        return isNaN(date.getTime()) ? null : date;
+    }
+
+    // ISO แบบไม่มีโซนเวลา: อ่านเป็นเวลาท้องถิ่น (ถ้าปล่อยให้ Date อ่านเองจะกลายเป็น UTC แล้วเพี้ยน 7 ชม.)
+    const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
+    if (iso) {
+        const [, y, mo, d, hh = 0, mi = 0, ss = 0] = iso;
+        const date = new Date(Number(y), Number(mo) - 1, Number(d), Number(hh), Number(mi), Number(ss));
+        return isNaN(date.getTime()) ? null : date;
+    }
+
+    // เหลือจากนั้น (ISO ที่มี Z หรือ offset ฯลฯ) ให้ Date จัดการเอง
+    const date = new Date(text);
+    return isNaN(date.getTime()) ? null : date;
+};
+
+/** วันที่ + เวลาเต็ม เช่น "18-08-2569 08:58:07" */
 const formatThaiDate = (dateStr) => {
     if (!dateStr) return '---';
-    try {
-        let date;
-        if (typeof dateStr === 'string' && dateStr.includes('/')) {
-            const parts = dateStr.split(' ');
-            const dParts = parts[0].split('/');
-            const tPart = parts[1] || '00:00:00';
-            date = new Date(`${dParts[2]}-${dParts[1]}-${dParts[0]}T${tPart}`);
-        } else {
-            date = new Date(dateStr);
-        }
-        
-        if (isNaN(date.getTime())) return dateStr;
-        return date.toLocaleDateString('th-TH', {
-            day: '2-digit', month: '2-digit', year: 'numeric',
-            hour: '2-digit', minute: '2-digit', second: '2-digit',
-            hour12: false
-        }).replace(/\//g, '-');
-    } catch (e) { return dateStr; }
+    const date = parseRecordDate(dateStr);
+    if (!date) return dateStr;
+    return date.toLocaleDateString('th-TH', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+    }).replace(/\//g, '-');
+};
+
+/** เฉพาะวันที่ เช่น "18-08-2569" */
+const formatThaiDateOnly = (dateStr) => {
+    if (!dateStr) return '---';
+    const date = parseRecordDate(dateStr);
+    if (!date) return dateStr;
+    return date.toLocaleDateString('th-TH', {
+        day: '2-digit', month: '2-digit', year: 'numeric'
+    }).replace(/\//g, '-');
+};
+
+/** เฉพาะเวลาแบบ 24 ชม. "08:58" (ส่ง withSeconds = true เพื่อได้ "08:58:07") */
+const formatThaiTimeOnly = (dateStr, withSeconds = false) => {
+    const date = parseRecordDate(dateStr);
+    if (!date) return '--:--';
+    const pad = (n) => String(n).padStart(2, '0');
+    const base = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return withSeconds ? `${base}:${pad(date.getSeconds())}` : base;
+};
+
+/** ผลต่างเวลาแบบอ่านง่าย เช่น "8 ชม. 45 นาที" (คืน '' ถ้าข้อมูลไม่ครบหรือกลับลำดับ) */
+const formatDuration = (startStr, endStr) => {
+    const s = parseRecordDate(startStr);
+    const e = parseRecordDate(endStr);
+    if (!s || !e || e <= s) return '';
+    const mins = Math.round((e - s) / 60000);
+    return `${Math.floor(mins / 60)} ชม. ${String(mins % 60).padStart(2, '0')} นาที`;
 };
 
 function showImageLightbox(imageUrl, title = '') {
@@ -2232,14 +2285,43 @@ function applyAttendanceHistory(history) {
   const todayStr = getLocalDateKey();
   hasCheckedInToday = false;
   hasCheckedOutToday = false;
+  todayCheckInAt = null;
+  todayCheckOutAt = null;
   (history || []).forEach(h => {
     if (getAttendanceDateKey(h.date) !== todayStr) return;
     const savedStatus = String(h.status || '').trim();
-    if (savedStatus === 'เข้างาน') hasCheckedInToday = true;
-    if (savedStatus === 'ออกงาน') hasCheckedOutToday = true;
+    const stamp = parseRecordDate(h.date);
+    if (savedStatus === 'เข้างาน') {
+      hasCheckedInToday = true;
+      // ยึด "เข้างานครั้งแรก" ของวัน
+      const cur = parseRecordDate(todayCheckInAt);
+      if (stamp && (!cur || stamp < cur)) todayCheckInAt = h.date;
+    }
+    if (savedStatus === 'ออกงาน') {
+      hasCheckedOutToday = true;
+      // ยึด "ออกงานครั้งล่าสุด" ของวัน
+      const cur = parseRecordDate(todayCheckOutAt);
+      if (stamp && (!cur || stamp > cur)) todayCheckOutAt = h.date;
+    }
   });
   isAttendanceStatusResolved = true;
+  renderTodayTimes();
   checkButtonStatus();
+}
+
+/** สรุปเวลาเข้า-ออกงานของวันนี้ให้เห็นชัดบนหน้าลงเวลา */
+function renderTodayTimes() {
+  $('#todayDateBadge').text(formatThaiDateOnly(new Date()));
+  $('#txtTimeIn').text(todayCheckInAt ? formatThaiTimeOnly(todayCheckInAt) : '--:--');
+  $('#txtTimeOut').text(todayCheckOutAt ? formatThaiTimeOnly(todayCheckOutAt) : '--:--');
+
+  const duration = formatDuration(todayCheckInAt, todayCheckOutAt);
+  if (duration) {
+    $('#txtWorkDuration').text(duration);
+    $('#workDurationBox').removeClass('hidden');
+  } else {
+    $('#workDurationBox').addClass('hidden');
+  }
 }
 
 function setAttendanceStatusLoading(isRetry = false) {
@@ -2595,21 +2677,25 @@ function renderHistory(data) {
     $('#historyList').html('<div class="premium-card p-10 text-center"><i class="fas fa-info-circle text-slate-200 text-4xl mb-4"></i><p class="text-slate-400 text-sm font-bold">ยังไม่มีประวัติการลงเวลา</p></div>');
     return;
   }
-  let html = data.map(item => `
-    <div class="premium-card p-5 flex justify-between items-center group animate-in slide-in-from-right-5 duration-300">
-      <div class="flex items-center gap-4">
-        <div class="w-12 h-12 ${item.status === 'เข้างาน' ? 'bg-emerald-50 text-emerald-500' : 'bg-rose-50 text-rose-500'} rounded-2xl flex items-center justify-center text-lg shadow-sm">
-            <i class="fas ${item.status === 'เข้างาน' ? 'fa-sign-in-alt' : 'fa-sign-out-alt'}"></i>
-        </div>
-        <div>
-          <span class="inline-block px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest ${item.status === 'เข้างาน' ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'} mb-1 shadow-md shadow-opacity-20">${item.status}</span>
-          <p class="font-black text-slate-700 text-[11px] leading-tight">${formatThaiDate(item.date)}</p>
-          ${item.location_name ? `<p class="mt-1 text-[10px] leading-snug text-slate-400"><i class="fas fa-map-marker-alt mr-1 text-blue-400"></i>${escapeHTML(item.location_name)}</p>` : ''}
-        </div>
+  let html = data.map(item => {
+    const isIn = item.status === 'เข้างาน';
+    return `
+    <div class="premium-card p-4 flex items-center gap-3 group animate-in slide-in-from-right-5 duration-300">
+      <div class="w-11 h-11 shrink-0 ${isIn ? 'bg-emerald-500' : 'bg-rose-500'} text-white rounded-2xl flex items-center justify-center text-base shadow-md">
+          <i class="fas ${isIn ? 'fa-sign-in-alt' : 'fa-sign-out-alt'}"></i>
       </div>
-      <a href="${item.map_link}" target="_blank" class="w-10 h-10 bg-slate-50 text-slate-400 rounded-xl flex items-center justify-center hover:bg-blue-600 hover:text-white transition-all shadow-sm"><i class="fas fa-map-marked-alt text-xs"></i></a>
-    </div>
-  `).join('');
+      <div class="min-w-0 flex-1 space-y-1.5">
+        <span class="inline-block px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest ${isIn ? 'bg-emerald-500' : 'bg-rose-500'} text-white shadow-sm">${item.status}</span>
+        <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-black tabular-nums leading-snug">
+          <span class="text-slate-700">${formatThaiDateOnly(item.date)}</span>
+          <span class="text-slate-400 font-normal px-0.5">|</span>
+          <span class="${isIn ? 'text-emerald-600' : 'text-rose-600'}">${formatThaiTimeOnly(item.date)} น.</span>
+        </p>
+        ${item.location_name ? `<p class="text-[10px] leading-snug text-slate-400 truncate"><i class="fas fa-map-marker-alt mr-1 text-blue-400"></i>${escapeHTML(item.location_name)}</p>` : ''}
+      </div>
+      <a href="${item.map_link}" target="_blank" class="w-10 h-10 shrink-0 bg-slate-50 text-slate-400 rounded-xl flex items-center justify-center hover:bg-blue-600 hover:text-white transition-all shadow-sm"><i class="fas fa-map-marked-alt text-xs"></i></a>
+    </div>`;
+  }).join('');
   $('#historyList').html(html);
 }
 
@@ -2918,11 +3004,13 @@ function renderAdminLogs() {
   $('#btnNextPage').prop('disabled', adminCurrentPage === totalPages);
 
   if (pageData.length === 0) {
-      $('#adminTableBody').html('<tr><td colspan="6" class="p-10 text-center text-slate-300 font-medium">ไม่พบข้อมูลบันทึกเวลา</td></tr>');
+      $('#adminTableBody').html('<tr><td colspan="7" class="p-10 text-center text-slate-300 font-medium">ไม่พบข้อมูลบันทึกเวลา</td></tr>');
       return;
   }
 
-  $('#adminTableBody').html(pageData.map(r => `
+  $('#adminTableBody').html(pageData.map(r => {
+    const isIn = r.status === 'เข้างาน';
+    return `
     <tr class="hover:bg-slate-50 transition-colors">
       <td class="p-4">
         <div class="flex items-center gap-3">
@@ -2930,13 +3018,18 @@ function renderAdminLogs() {
         </div>
       </td>
       <td class="p-4">
-        <div class="text-slate-500 font-mono">${formatThaiDate(r.date)}</div>
+        <div class="text-slate-500 font-mono text-[11px] whitespace-nowrap">${formatThaiDateOnly(r.date)}</div>
+      </td>
+      <td class="p-3 text-center">
+        <span class="inline-flex items-center gap-1.5 font-black tabular-nums text-sm whitespace-nowrap ${isIn ? 'text-emerald-600' : 'text-rose-600'}">
+          <i class="fas ${isIn ? 'fa-sign-in-alt' : 'fa-sign-out-alt'} text-[9px] opacity-60"></i>${formatThaiTimeOnly(r.date)}
+        </span>
       </td>
       <td class="p-4 text-center">
         ${r.id ? `<button type="button" onclick="showAttendancePhoto('${r.id}')" class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors" title="เปิดรูปยืนยันตัวตน" aria-label="เปิดรูปยืนยันตัวตน"><i class="fas fa-image"></i></button>` : '<span class="text-slate-300">-</span>'}
       </td>
       <td class="p-4 text-center">
-        <span class="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${r.status==='เข้างาน'?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}">${r.status}</span>
+        <span class="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${isIn ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}">${r.status}</span>
       </td>
       <td class="p-4">
         <div class="text-[10px] text-slate-500 font-mono whitespace-nowrap">
@@ -2948,8 +3041,8 @@ function renderAdminLogs() {
       <td class="p-3 text-center">
         <a href="${r.map_link}" target="_blank" class="w-7 h-7 bg-blue-50 text-blue-500 rounded-lg inline-flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all shadow-sm shadow-blue-100"><i class="fas fa-map-marked-alt text-[10px]"></i></a>
       </td>
-    </tr>
-  `).join(''));
+    </tr>`;
+  }).join(''));
 }
 
 async function showAttendancePhoto(attendanceId) {
@@ -3900,7 +3993,8 @@ async function exportToExcel() {
     
     const data = records.map(r => ({ 
         "ชื่อพนักงาน": r.name, 
-        "วันเวลา": formatThaiDate(r.date), 
+        "วันที่": formatThaiDateOnly(r.date), 
+        "เวลา": formatThaiTimeOnly(r.date, true), 
         "สถานะ": r.status, 
         "พิกัด": `${r.latitude},${r.longitude}`, 
         "ตำบล / อำเภอ / จังหวัด": r.location_name || '',
@@ -3928,7 +4022,8 @@ async function exportToCSV() {
     
     const data = records.map(r => ({ 
         "ชื่อพนักงาน": r.name, 
-        "วันเวลา": formatThaiDate(r.date), 
+        "วันที่": formatThaiDateOnly(r.date), 
+        "เวลา": formatThaiTimeOnly(r.date, true), 
         "สถานะ": r.status, 
         "พิกัด": `"${(r.latitude && !isNaN(r.latitude)) ? parseFloat(r.latitude).toFixed(4) : '0.0000'}, ${(r.longitude && !isNaN(r.longitude)) ? parseFloat(r.longitude).toFixed(4) : '0.0000'}"`, 
         "ตำบล / อำเภอ / จังหวัด": `"${String(r.location_name || '').replace(/"/g, '""')}"`,

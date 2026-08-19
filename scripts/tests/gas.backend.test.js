@@ -184,3 +184,59 @@ test('saveAttendance: กันลำดับผิดฝั่ง server ย�
   const bad = env.call('saveAttendance', { user_id: 'U002', status: 'พักเที่ยง', latitude: 1, longitude: 1, location_name: 'x', selfie: 'p' });
   assert.equal(bad.success, false);
 });
+
+test('REGRESSION: เซลล์ datetime ที่เป็นค่าวันที่จริง ต้องคืนเวลาออกมาครบ (เคยโดน getDisplayValues ตัดทิ้ง)', () => {
+  // ชีทจริงเก็บ datetime เป็นค่าวันที่ ไม่ใช่ข้อความ — ถ้าเซลล์ถูกตั้งรูปแบบเป็น "วันที่ล้วน"
+  // getDisplayValues() จะคืนแค่ "18/8/2026" ทำให้เวลาหายและหน้าจอโชว์ 00:00
+  const stamp = new Date(2026, 7, 18, 8, 58, 7); // 18/08/2026 08:58:07 เวลาท้องถิ่น
+  const env = loadGas({
+    attendanceRows: [
+      ['A1', 'U001', stamp, 'เข้างาน', 17.4, 102.8, 'map', 'อุดรธานี', BIG_SELFIE, 'Web'],
+    ],
+  });
+
+  const res = env.call('getUserHistory', 'U001');
+  assert.equal(res.success, true);
+  assert.equal(res.history.length, 1);
+  assert.equal(res.history[0].date, '18/08/2026 08:58:07', 'ต้องได้ dd/MM/yyyy HH:mm:ss ครบ ไม่ใช่วันที่ล้วน');
+});
+
+test('normalizeDateTimeCell: รองรับทั้ง Date, ข้อความเดิม และค่าว่าง', () => {
+  const env = loadGas({ attendanceRows: [] });
+  const call = (v) => env.context.normalizeDateTimeCell(v);
+
+  assert.equal(call(new Date(2026, 7, 18, 8, 58, 7)), '18/08/2026 08:58:07');
+  assert.equal(call('19/08/2026 08:58:07'), '19/08/2026 08:58:07', 'ข้อความเดิมต้องผ่านไปเหมือนเดิม');
+  assert.equal(call('  18/8/2026  '), '18/8/2026', 'ตัดช่องว่างหัวท้าย');
+  assert.equal(call(''), '');
+  assert.equal(call(null), '');
+  assert.equal(call(undefined), '');
+});
+
+test('dateToIsoDate: อ่านได้ทั้ง Date, เลขเติมศูนย์ และเลขไม่เติมศูนย์ (ตัวกรองวันที่ฝั่งแอดมิน)', () => {
+  const env = loadGas({ attendanceRows: [] });
+  const call = (v) => env.context.dateToIsoDate(v);
+
+  assert.equal(call(new Date(2026, 7, 18, 8, 58, 7)), '2026-08-18');
+  assert.equal(call('19/08/2026 08:58:07'), '2026-08-19');
+  assert.equal(call('18/8/2026'), '2026-08-18', 'เลขไม่เติมศูนย์ต้องอ่านออก ไม่งั้นตัวกรองวันที่พัง');
+  assert.equal(call('5/1/2026 07:00:00'), '2026-01-05');
+});
+
+test('REGRESSION: guard กันลงเวลาซ้ำต้องทำงานแม้ datetime เป็นค่าวันที่จริง', () => {
+  // เดิม guard เทียบ prefix จากข้อความที่ชีทแสดง ถ้าเซลล์เป็นค่าวันที่จะเทียบไม่ติด
+  // แล้วปล่อยให้กด "เข้างาน" ซ้ำได้ทั้งที่ลงไปแล้ว
+  const todayStamp = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8, 4, 0);
+  const env = loadGas({
+    attendanceRows: [
+      ['A1', 'U001', todayStamp, 'เข้างาน', 17.4, 102.8, 'map', 'อุดรธานี', BIG_SELFIE, 'Web'],
+    ],
+  });
+
+  const res = env.call('saveAttendance', {
+    user_id: 'U001', status: 'เข้างาน', latitude: 17.4, longitude: 102.8,
+    location_name: 'อุดรธานี', selfie_base64: 'data:image/jpeg;base64,TESTPHOTO',
+  });
+
+  assert.equal(res.success, false, 'ต้องกันการเข้างานซ้ำของวันเดียวกัน');
+});

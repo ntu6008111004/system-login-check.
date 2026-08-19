@@ -359,3 +359,57 @@ test('งบเวลา get_history ทุกชั้นรวมกันต�
   );
   assert.match(source, /let attendanceStatusFailed = false;/, 'ตัวแปรสถานะ error ต้องถูกประกาศ');
 });
+
+test('REGRESSION: formatThaiTimeOnly อ่านเวลาจากข้อมูลเก่าที่เลขไม่เติมศูนย์ได้ (เคยโชว์สตริงดิบออกจอ)', () => {
+  const { evalIn } = loadApp();
+  // เคสจริงจากชีทที่เคยแสดงผลเป็น "19/08/2026 8:58:07" ดิบ ๆ เพราะ new Date() อ่าน ISO ที่ไม่เติมศูนย์ไม่ออก
+  assert.equal(evalIn(`formatThaiTimeOnly('19/08/2026 8:58:07')`), '08:58');
+  assert.equal(evalIn(`formatThaiTimeOnly('5/1/2026 7:05:00')`), '07:05');
+  assert.equal(evalIn(`formatThaiTimeOnly('19/08/2026 08:58:07')`), '08:58');
+  assert.equal(evalIn(`formatThaiTimeOnly('19/08/2026 08:58:07', true)`), '08:58:07');
+  // แถวเก่าที่เก็บแค่วันที่ ไม่มีเวลาในข้อมูล -> 00:00
+  assert.equal(evalIn(`formatThaiTimeOnly('18/8/2026')`), '00:00');
+  // ค่าที่อ่านไม่ออกต้องไม่หลุดสตริงดิบออกจอ
+  assert.equal(evalIn(`formatThaiTimeOnly('ขยะ')`), '--:--');
+  assert.equal(evalIn(`formatThaiTimeOnly('')`), '--:--');
+  assert.equal(evalIn(`formatThaiTimeOnly(null)`), '--:--');
+});
+
+test('formatThaiTimeOnly: ISO ไม่มีโซนเวลาต้องอ่านเป็นเวลาท้องถิ่น ไม่ใช่ UTC', () => {
+  const { evalIn } = loadApp();
+  // ถ้าปล่อยให้ new Date() อ่าน "2026-08-19" เองจะกลายเป็น UTC เที่ยงคืน แล้วเพี้ยนไป 7 ชม.
+  assert.equal(evalIn(`formatThaiTimeOnly('2026-08-19T08:58:07')`), '08:58');
+  assert.equal(evalIn(`formatThaiTimeOnly('2026-08-19')`), '00:00');
+});
+
+test('formatDuration: คำนวณชั่วโมงทำงานจากเวลาเข้า-ออก และกันข้อมูลกลับลำดับ', () => {
+  const { evalIn } = loadApp();
+  assert.equal(evalIn(`formatDuration('19/08/2026 8:58:07', '19/08/2026 17:34:09')`), '8 ชม. 36 นาที');
+  assert.equal(evalIn(`formatDuration('19/08/2026 08:00:00', '19/08/2026 08:05:00')`), '0 ชม. 05 นาที');
+  assert.equal(evalIn(`formatDuration('19/08/2026 17:00:00', '19/08/2026 08:00:00')`), '');
+  assert.equal(evalIn(`formatDuration('19/08/2026 08:00:00', null)`), '');
+});
+
+test('การ์ดสรุปวันนี้: เก็บเข้างานครั้งแรก + ออกงานครั้งล่าสุด แล้วแสดงเป็น HH:MM', () => {
+  const { evalIn, ui } = loadApp();
+  const today = todayThai();
+  evalIn(`applyAttendanceHistory(${JSON.stringify([
+    { date: `${today} 8:58:07`, status: 'เข้างาน' },
+    { date: `${today} 12:01:00`, status: 'เข้างาน' },
+    { date: `${today} 17:34:09`, status: 'ออกงาน' },
+    { date: '18/8/2026 09:00:00', status: 'เข้างาน' },
+  ])})`);
+  assert.equal(ui('#txtTimeIn').text, '08:58', 'ต้องยึดเข้างานครั้งแรกของวัน');
+  assert.equal(ui('#txtTimeOut').text, '17:34', 'ต้องยึดออกงานครั้งล่าสุดของวัน');
+  assert.equal(ui('#txtWorkDuration').text, '8 ชม. 36 นาที');
+  assert.equal(evalIn('hasCheckedInToday'), true);
+  assert.equal(evalIn('hasCheckedOutToday'), true);
+});
+
+test('การ์ดสรุปวันนี้: ยังไม่ลงเวลาเลยต้องเป็น --:-- และซ่อนกล่องชั่วโมงรวม', () => {
+  const { evalIn, ui } = loadApp();
+  evalIn(`applyAttendanceHistory([{ date: '18/8/2026 09:00:00', status: 'เข้างาน' }])`);
+  assert.equal(ui('#txtTimeIn').text, '--:--');
+  assert.equal(ui('#txtTimeOut').text, '--:--');
+  assert.equal(evalIn('hasCheckedInToday'), false);
+});

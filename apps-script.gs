@@ -72,7 +72,7 @@ function sanitizeLogData(data) {
 // ไฟล์ V2 (18/08/2026) — ไฟล์เดิม 1B3iZtBSzCAVILYGn1qAIAZdudpour3OPvGXrh2LUQc8 เสียภายใน
 // (Google ปฏิเสธการเขียนแถวใหม่: "document cannot be modified") เก็บไว้เป็น archive อ่านอย่างเดียว
 const SPREADSHEET_ID = "16BKASaGtwEzgmU9yGyFm8XhVLPhK_yUzmfHmTqT-FTA";
-const APP_VERSION = "1.3.18";
+const APP_VERSION = "1.3.19";
 const SCHEMA_VERSION = "10";
 // จำนวนแถวท้ายชีทที่อ่านเพื่อกันลงเวลาซ้ำ — พนักงาน ~22 คน = ~44 แถว/วัน จึงครอบคลุมย้อนหลังกว่า 10 วัน
 const GUARD_SCAN_ROWS = 500;
@@ -1203,15 +1203,17 @@ function saveAttendance(p) {
       const lastGuardColumn = Math.max.apply(null, guardColumns);
       const lastRow = sheet.getLastRow();
       const guardStartRow = Math.max(2, lastRow - GUARD_SCAN_ROWS + 1);
+      // ช่วงอ่านเท่าเดิม (ห้ามคร่อมคอลัมน์ selfie) แต่ต้องเป็นค่าจริง ไม่งั้นแถวที่ฟอร์แมต
+      // เป็นวันที่ล้วนจะเทียบ prefix "dd/MM/yyyy" ไม่ติด แล้วปล่อยให้ลงเวลาซ้ำได้
       const guardRows = sheet
         .getRange(guardStartRow, firstGuardColumn + 1, lastRow - guardStartRow + 1, lastGuardColumn - firstGuardColumn + 1)
-        .getDisplayValues();
+        .getValues();
       const localUserIndex = userIndex - firstGuardColumn;
       const localDateIndex = dateIndex - firstGuardColumn;
       const localStatusIndex = statusIndex - firstGuardColumn;
       for (let row = 0; row < guardRows.length; row++) {
         if (String(guardRows[row][localUserIndex]) !== String(p.user_id)) continue;
-        if (!String(guardRows[row][localDateIndex]).trim().startsWith(todayPrefix)) continue;
+        if (!normalizeDateTimeCell(guardRows[row][localDateIndex]).startsWith(todayPrefix)) continue;
         const savedStatus = String(guardRows[row][localStatusIndex]).trim();
         if (savedStatus === "เข้างาน") hasCheckedIn = true;
         if (savedStatus === "ออกงาน") hasCheckedOut = true;
@@ -1272,7 +1274,8 @@ function getUserHistory(userId, forceFresh) {
   const historyColumns = [userIdx, dateIdx, statusIdx, mapIdx, locationIdx].filter(function (index) { return index >= 0; });
   const firstColumn = Math.min.apply(null, historyColumns);
   const lastColumn = Math.max.apply(null, historyColumns);
-  const data = sheet.getRange(2, firstColumn + 1, rowCount, lastColumn - firstColumn + 1).getDisplayValues();
+  // ต้องเป็น getValues(): getDisplayValues() ตัดเวลาทิ้งตามรูปแบบเซลล์ (ดู normalizeDateTimeCell)
+  const data = sheet.getRange(2, firstColumn + 1, rowCount, lastColumn - firstColumn + 1).getValues();
   const localUserIdx = userIdx - firstColumn;
   const localDateIdx = dateIdx - firstColumn;
   const localStatusIdx = statusIdx - firstColumn;
@@ -1283,10 +1286,10 @@ function getUserHistory(userId, forceFresh) {
   for (let i = data.length - 1; i >= 0; i--) {
     if (String(data[i][localUserIdx]) === String(userId)) {
       history.push({
-        date: data[i][localDateIdx],
-        status: data[i][localStatusIdx],
-        map_link: data[i][localMapIdx],
-        location_name: localLocationIdx >= 0 ? data[i][localLocationIdx] : "",
+        date: normalizeDateTimeCell(data[i][localDateIdx]),
+        status: String(data[i][localStatusIdx] == null ? "" : data[i][localStatusIdx]).trim(),
+        map_link: String(data[i][localMapIdx] == null ? "" : data[i][localMapIdx]),
+        location_name: localLocationIdx >= 0 ? String(data[i][localLocationIdx] == null ? "" : data[i][localLocationIdx]) : "",
       });
     }
   }
@@ -1499,11 +1502,28 @@ function updateUser(u) {
   }
 }
 
+/**
+ * คืนค่า datetime ของเซลล์เป็นข้อความมาตรฐาน "dd/MM/yyyy HH:mm:ss" เสมอ
+ *
+ * เหตุผล: ห้ามอ่านคอลัมน์ datetime ด้วย getDisplayValues() เพราะมันคืน "ข้อความตามรูปแบบ
+ * ที่ชีทตั้งไว้" แถวที่เซลล์ถูกฟอร์แมตเป็นวันที่ล้วนจะได้ "18/8/2026" คือเวลาหายไปทั้งแถว
+ * และยังทำให้ dateToIsoDate() อ่านไม่ออกเพราะเลขไม่เติมศูนย์ → ตัวกรองวันที่ฝั่งแอดมินเพี้ยนตาม
+ * ค่าจริงในเซลล์เป็น Date อยู่แล้ว จึงต้องอ่านด้วย getValues() แล้วฟอร์แมตเองตรงนี้
+ */
+function normalizeDateTimeCell(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm:ss");
+  }
+  return String(value == null ? "" : value).trim();
+}
+
 function dateToIsoDate(value) {
-  const text = String(value || "");
-  if (/^\d{2}\/\d{2}\/\d{4}/.test(text)) {
-    const parts = text.slice(0, 10).split("/");
-    return parts[2] + "-" + parts[1] + "-" + parts[0];
+  const text = normalizeDateTimeCell(value);
+  const thai = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (thai) {
+    const day = thai[1].length === 2 ? thai[1] : "0" + thai[1];
+    const month = thai[2].length === 2 ? thai[2] : "0" + thai[2];
+    return thai[3] + "-" + month + "-" + day;
   }
   return text.slice(0, 10);
 }
@@ -1591,12 +1611,13 @@ function getAllAttendance(params) {
     const compactLastColumn = query.export
       ? Math.max.apply(null, exportColumns)
       : Math.max(column.user_id, column.datetime);
-    compactRows = attSheet.getRange(2, compactFirstColumn + 1, totalRows, compactLastColumn - compactFirstColumn + 1).getDisplayValues();
+    // getValues() เพื่อให้คอลัมน์ datetime ยังเป็น Date จริง (ดู normalizeDateTimeCell)
+    compactRows = attSheet.getRange(2, compactFirstColumn + 1, totalRows, compactLastColumn - compactFirstColumn + 1).getValues();
     const localUserColumn = column.user_id - compactFirstColumn;
     const localDateColumn = column.datetime - compactFirstColumn;
     for (let i = compactRows.length - 1; i >= 0; i--) {
       const userId = String(compactRows[i][localUserColumn] || "");
-      const isoDate = dateToIsoDate(compactRows[i][localDateColumn]);
+      const isoDate = dateToIsoDate(normalizeDateTimeCell(compactRows[i][localDateColumn]));
       const user = userMap[userId] || {};
       if (query.start && isoDate < query.start) continue;
       if (query.end && isoDate > query.end) continue;
@@ -1633,11 +1654,11 @@ function getAllAttendance(params) {
       const firstRow = selectedRows[selectedRows.length - 1];
       selectedData = attSheet
         .getRange(firstRow, 1, selectedRows.length, responseLastColumn + 1)
-        .getDisplayValues()
+        .getValues()
         .reverse();
     } else {
       selectedData = selectedRows.map(function (rowNumber) {
-        return attSheet.getRange(rowNumber, 1, 1, responseLastColumn + 1).getDisplayValues()[0];
+        return attSheet.getRange(rowNumber, 1, 1, responseLastColumn + 1).getValues()[0];
       });
     }
   }
@@ -1655,7 +1676,7 @@ function getAllAttendance(params) {
     record.name = user.name;
     record.branch_id = user.branch_id;
     record.branch_name = branchMap[user.branch_id] || user.company || "";
-    record.date = query.export ? row[column.datetime - compactFirstColumn] : row[column.datetime];
+    record.date = normalizeDateTimeCell(query.export ? row[column.datetime - compactFirstColumn] : row[column.datetime]);
     records.push(record);
     if (!query.export && record.id) {
       photoRowCacheEntries["attendance_photo_row_v" + attendanceDataVersion + "_" + record.id] = String(rowNumber);
